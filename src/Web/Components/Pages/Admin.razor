@@ -1,0 +1,63 @@
+@page "/admin"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inherits LiveComponent
+
+<PageTitle>Admin</PageTitle>
+
+<h1>Admin</h1>
+
+@if( this.CurrentUser is not { IsAdmin: true } )
+{
+    <p>You need the Admin role to manage users.</p>
+    return;
+}
+
+@if( this.Error != null )
+{
+    <div class="alert alert-danger">@this.Error</div>
+}
+
+<table class="table align-middle">
+    <thead>
+        <tr>
+            <th>Display name</th>
+            <th>Username</th>
+            <th>Registered</th>
+            <th>Admin</th>
+            <th>Chair</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach( var user in this.State.Users )
+        {
+            <tr>
+                <td>@user.DisplayName</td>
+                <td>@user.UserName</td>
+                <td>@user.CreatedAtUtc.ToString( "yyyy-MM-dd" )</td>
+                <td>
+                    <input type="checkbox"
+                           class="form-check-input"
+                           checked="@user.Roles.Contains( Roles.Admin )"
+                           disabled="@( user.Id == this.CurrentUser!.Id )"
+                           @onchange="e => this.SetRoleAsync( user.Id, Roles.Admin, (bool) e.Value! )" />
+                </td>
+                <td>
+                    <input type="checkbox"
+                           class="form-check-input"
+                           checked="@user.Roles.Contains( Roles.Chair )"
+                           @onchange="e => this.SetRoleAsync( user.Id, Roles.Chair, (bool) e.Value! )" />
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<p class="text-muted">
+    Admins can do everything a chair can. You cannot remove your own admin role.
+</p>
+
+@code {
+    private async Task SetRoleAsync( string userId, string role, bool granted )
+        => await this.Run( () => this.State.SetRoleAsync( userId, role, granted ) );
+}

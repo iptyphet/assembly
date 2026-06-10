@@ -1,0 +1,55 @@
+@*
+    Renders an amendment as a diff against the clause text it targets:
+    strike-through for removed text, highlight for inserted text.
+*@
+
+<div class="amendment-diff">
+    @if( this.Amendment.Kind == AmendmentKind.StrikeClause )
+    {
+        <del>@this.OldText</del>
+    }
+    else if( this.Amendment.Kind == AmendmentKind.InsertClauseAfter )
+    {
+        <ins>@this.Amendment.NewText</ins>
+    }
+    else
+    {
+        foreach( var segment in WordDiff.Compute( this.OldText ?? "", this.Amendment.NewText ?? "" ) )
+        {
+            switch( segment.Kind )
+            {
+                case DiffKind.Same:
+                    <span>@segment.Text </span>
+                    break;
+                case DiffKind.Removed:
+                    <del>@segment.Text </del>
+                    break;
+                case DiffKind.Added:
+                    <ins>@segment.Text </ins>
+                    break;
+            }
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public Proposal Proposal { get; set; } = default!;
+
+    [Parameter, EditorRequired]
+    public Amendment Amendment { get; set; } = default!;
+
+    private string? OldText
+    {
+        get
+        {
+            var version = this.Proposal.Versions
+                .FirstOrDefault( v => v.Number == this.Amendment.TargetVersion )
+                ?? this.Proposal.Latest;
+
+            return version.Clauses
+                .FirstOrDefault( c => c.Id == this.Amendment.ClauseId )
+                ?.Text;
+        }
+    }
+}

@@ -1,0 +1,317 @@
+@page "/sessions/{Id}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inherits LiveComponent
+
+@if( this.Session == null )
+{
+    <h1>Session not found</h1>
+    return;
+}
+
+<PageTitle>@this.Session.Title</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center">
+    <h1>@this.Session.Title</h1>
+    <a class="btn btn-outline-secondary" href="/projector/@this.Session.Id" target="_blank">Projector</a>
+</div>
+
+@if( this.Error != null )
+{
+    <div class="alert alert-danger">@this.Error</div>
+}
+
+@foreach( var item in this.Session.AgendaItems )
+{
+    var isCurrent = item.Id == this.Session.CurrentAgendaItemId;
+    var proposal = item.ProposalId == null ? null : this.State.GetProposal( item.ProposalId );
+
+    <div class="card mb-3 @( isCurrent ? "border-primary border-2" : "" )">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center">
+                <h4>
+                    @item.Title
+                    @if( isCurrent )
+                    {
+                        <span class="badge text-bg-primary">current</span>
+                    }
+                </h4>
+                @if( this.IsChair && !isCurrent )
+                {
+                    <button class="btn btn-sm btn-outline-primary"
+                            @onclick="() => this.SetCurrentAsync( item.Id )">
+                        Make current
+                    </button>
+                }
+            </div>
+
+            @if( proposal != null )
+            {
+                <p>
+                    <a href="/proposals/@proposal.Id">@proposal.Title</a>
+                    <StatusBadge Status="proposal.Status" />
+                </p>
+            }
+
+            <h5>
+                Speakers list
+                @if( !item.SpeakersOpen )
+                {
+                    <span class="badge text-bg-danger">closed</span>
+                }
+            </h5>
+
+            @if( item.NowSpeaking is { } speaking )
+            {
+                <p class="now-speaking">
+                    🎤 <strong>@speaking.DisplayName</strong>
+                    @( speaking.Kind == SpeakerKind.Reply ? " (reply)" : "" )
+                </p>
+            }
+
+            @if( item.Queue.Count > 0 )
+            {
+                <ol>
+                    @foreach( var entry in item.Queue )
+                    {
+                        <li>
+                            @entry.DisplayName
+                            @if( entry.Kind == SpeakerKind.Reply )
+                            {
+                                <span class="badge text-bg-info">reply</span>
+                            }
+                        </li>
+                    }
+                </ol>
+            }
+            else if( item.NowSpeaking == null )
+            {
+                <p class="text-muted">Nobody on the list.</p>
+            }
+
+            <div class="mb-3">
+                @if( item.SpeakersOpen )
+                {
+                    <button class="btn btn-sm btn-outline-primary me-1"
+                            @onclick="() => this.RequestAsync( item.Id, SpeakerKind.Speech )">
+                        Request to speak
+                    </button>
+                    <button class="btn btn-sm btn-outline-info me-1"
+                            @onclick="() => this.RequestAsync( item.Id, SpeakerKind.Reply )">
+                        Request reply
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary me-1"
+                            @onclick="() => this.WithdrawAsync( item.Id )">
+                        Withdraw
+                    </button>
+                }
+                @if( this.IsChair )
+                {
+                    <button class="btn btn-sm btn-primary me-1"
+                            @onclick="() => this.NextSpeakerAsync( item.Id )">
+                        Next speaker
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger"
+                            @onclick="() => this.ToggleSpeakersAsync( item )">
+                        @( item.SpeakersOpen ? "Close list" : "Reopen list" )
+                    </button>
+                }
+            </div>
+
+            <h5>Ballots</h5>
+
+            @foreach( var ballot in this.State.BallotsForSession( this.Session.Id ).Where( b => b.AgendaItemId == item.Id ) )
+            {
+                @this.RenderBallot( ballot )
+            }
+
+            @if( this.IsChair )
+            {
+                <div class="row g-2 align-items-center">
+                    <div class="col-auto">
+                        <input class="form-control form-control-sm"
+                               placeholder="Ballot title"
+                               @bind="this.newBallotTitle" />
+                    </div>
+                    <div class="col-auto">
+                        <select class="form-select form-select-sm" @bind="this.newBallotMode">
+                            <option value="@BallotMode.Open">Open (roll call)</option>
+                            <option value="@BallotMode.Secret">Secret ballot</option>
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-outline-primary"
+                                @onclick="() => this.CreateBallotAsync( item )">
+                            Create ballot
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@if( this.IsChair )
+{
+    <h2>Add agenda item</h2>
+
+    <div class="row g-2 align-items-center mb-5">
+        <div class="col-auto">
+            <input class="form-control" placeholder="Title" @bind="this.newItemTitle" />
+        </div>
+        <div class="col-auto">
+            <select class="form-select" @bind="this.newItemProposalId">
+                <option value="">— no proposal —</option>
+                @foreach( var proposal in this.State.Proposals )
+                {
+                    <option value="@proposal.Id">@proposal.Title</option>
+                }
+            </select>
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-primary" @onclick="this.AddItemAsync">Add</button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string Id { get; set; } = "";
+
+    private Session? Session => this.State.GetSession( this.Id );
+    private bool IsChair => this.CurrentUser is { IsChair: true };
+
+    private string newItemTitle = "";
+    private string newItemProposalId = "";
+    private string newBallotTitle = "";
+    private BallotMode newBallotMode = BallotMode.Open;
+
+    private RenderFragment RenderBallot( Ballot ballot ) => __builder =>
+    {
+        var tally = this.State.TallyOf( ballot.Id );
+        var hasVoted = this.CurrentUser != null && this.State.HasVoted( ballot.Id, this.CurrentUser );
+
+        <div class="card mb-2">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <strong>@ballot.Title</strong>
+                    <span>
+                        <span class="badge text-bg-light">@ballot.Mode</span>
+                        <span class="badge @( ballot.State == BallotState.Open ? "text-bg-success" : "text-bg-secondary" )">
+                            @ballot.State
+                        </span>
+                    </span>
+                </div>
+
+                @if( ballot.State == BallotState.Open )
+                {
+                    <div class="my-2">
+                        <button class="btn btn-success me-1" @onclick="() => this.VoteAsync( ballot.Id, VoteValue.For )">For</button>
+                        <button class="btn btn-danger me-1" @onclick="() => this.VoteAsync( ballot.Id, VoteValue.Against )">Against</button>
+                        <button class="btn btn-secondary" @onclick="() => this.VoteAsync( ballot.Id, VoteValue.Abstain )">Abstain</button>
+                        @if( hasVoted )
+                        {
+                            <span class="ms-2 text-success">✓ vote registered (you can change it while voting is open)</span>
+                        }
+                    </div>
+                }
+
+                @if( ballot.State != BallotState.Draft )
+                {
+                    <TallyBar Tally="tally" />
+                }
+
+                @if
+                (
+                    ballot.Mode == BallotMode.Open
+                    && ballot.State == BallotState.Closed
+                    && tally.Total > 0
+                )
+                {
+                    <details class="mt-2">
+                        <summary>Roll call</summary>
+                        <ul>
+                            @foreach( var vote in this.State.RollCallOf( ballot.Id ) )
+                            {
+                                <li>@vote.VoterDisplayName — @vote.Value</li>
+                            }
+                        </ul>
+                    </details>
+                }
+
+                @if( this.IsChair )
+                {
+                    <div class="mt-2">
+                        @if( ballot.State == BallotState.Draft )
+                        {
+                            <button class="btn btn-sm btn-success" @onclick="() => this.OpenBallotAsync( ballot.Id )">Open voting</button>
+                        }
+                        @if( ballot.State == BallotState.Open )
+                        {
+                            <button class="btn btn-sm btn-danger" @onclick="() => this.CloseBallotAsync( ballot.Id )">Close voting</button>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    };
+
+    private async Task SetCurrentAsync( string itemId )
+        => await this.Run( () => this.State.SetCurrentAgendaItemAsync( this.Id, itemId ) );
+
+    private async Task RequestAsync( string itemId, SpeakerKind kind )
+        => await this.Run( () => this.State.RequestSpeechAsync( this.Id, itemId, this.CurrentUser!, kind ) );
+
+    private async Task WithdrawAsync( string itemId )
+        => await this.Run( () => this.State.WithdrawSpeechAsync( this.Id, itemId, this.CurrentUser! ) );
+
+    private async Task NextSpeakerAsync( string itemId )
+        => await this.Run( () => this.State.NextSpeakerAsync( this.Id, itemId ) );
+
+    private async Task ToggleSpeakersAsync( AgendaItem item )
+        => await this.Run( () => this.State.SetSpeakersOpenAsync( this.Id, item.Id, !item.SpeakersOpen ) );
+
+    private async Task AddItemAsync()
+        => await this.Run
+        (
+            async () =>
+            {
+                await this.State.AddAgendaItemAsync
+                (
+                    this.Id,
+                    this.newItemTitle,
+                    this.newItemProposalId == "" ? null : this.newItemProposalId
+                );
+
+                this.newItemTitle = "";
+                this.newItemProposalId = "";
+            }
+        );
+
+    private async Task CreateBallotAsync( AgendaItem item )
+        => await this.Run
+        (
+            async () =>
+            {
+                await this.State.CreateBallotAsync
+                (
+                    this.Id,
+                    item.Id,
+                    item.ProposalId,
+                    this.newBallotTitle,
+                    this.newBallotMode
+                );
+
+                this.newBallotTitle = "";
+            }
+        );
+
+    private async Task VoteAsync( string ballotId, VoteValue value )
+        => await this.Run( () => this.State.CastVoteAsync( ballotId, this.CurrentUser!, value ) );
+
+    private async Task OpenBallotAsync( string ballotId )
+        => await this.Run( () => this.State.OpenBallotAsync( ballotId ) );
+
+    private async Task CloseBallotAsync( string ballotId )
+        => await this.Run( () => this.State.CloseBallotAsync( ballotId ) );
+}

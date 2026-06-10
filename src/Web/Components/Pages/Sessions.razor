@@ -1,0 +1,80 @@
+@page "/sessions"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inherits LiveComponent
+
+<PageTitle>Sessions</PageTitle>
+
+<h1>Sessions</h1>
+
+@if( this.Error != null )
+{
+    <div class="alert alert-danger">@this.Error</div>
+}
+
+@if( this.State.Sessions.Count == 0 )
+{
+    <p>No sessions yet.</p>
+}
+else
+{
+    <table class="table align-middle">
+        <thead>
+            <tr>
+                <th>Session</th>
+                <th>Scheduled</th>
+                <th>Agenda items</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach( var session in this.State.Sessions )
+            {
+                <tr>
+                    <td><a href="/sessions/@session.Id">@session.Title</a></td>
+                    <td>@( session.ScheduledForUtc?.ToString( "yyyy-MM-dd HH:mm" ) ?? "—" )</td>
+                    <td>@session.AgendaItems.Count</td>
+                    <td><a class="btn btn-sm btn-outline-secondary" href="/projector/@session.Id">Projector</a></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@if( this.CurrentUser is { IsChair: true } )
+{
+    <h2 class="mt-4">New session</h2>
+
+    <div class="col-12 col-md-6">
+        <div class="mb-2">
+            <input class="form-control" placeholder="Title" @bind="this.newTitle" />
+        </div>
+        <div class="mb-2">
+            <input class="form-control" type="datetime-local" @bind="this.newScheduledFor" />
+        </div>
+        <button class="btn btn-primary" @onclick="this.CreateAsync">Create session</button>
+    </div>
+}
+
+@code {
+    private string newTitle = "";
+    private DateTime? newScheduledFor;
+
+    private async Task CreateAsync()
+        => await this.Run
+        (
+            async () =>
+            {
+                await this.State.CreateSessionAsync
+                (
+                    this.newTitle,
+                    this.newScheduledFor == null
+                        ? null
+                        : new DateTimeOffset( this.newScheduledFor.Value, TimeSpan.Zero )
+                );
+
+                this.newTitle = "";
+                this.newScheduledFor = null;
+            }
+        );
+}

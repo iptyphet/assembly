@@ -1,0 +1,27 @@
+@*
+    Live tally as a stacked bar: green for, red against, grey abstain.
+*@
+
+<div class="tally-numbers">
+    <span class="text-success">For: @this.Tally.For</span>
+    <span class="text-danger">Against: @this.Tally.Against</span>
+    <span class="text-secondary">Abstain: @this.Tally.Abstain</span>
+    <span>Total: @this.Tally.Total</span>
+</div>
+
+@if( this.Tally.Total > 0 )
+{
+    <div class="tally-bar">
+        <div class="tally-for" style="width: @Percent( this.Tally.For )%"></div>
+        <div class="tally-against" style="width: @Percent( this.Tally.Against )%"></div>
+        <div class="tally-abstain" style="width: @Percent( this.Tally.Abstain )%"></div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public VoteTally Tally { get; set; } = default!;
+
+    private int Percent( int count )
+        => this.Tally.Total == 0 ? 0 : count * 100 / this.Tally.Total;
+}

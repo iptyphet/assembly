@@ -1,0 +1,162 @@
+@page "/groups"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inherits LiveComponent
+
+<PageTitle>Working groups</PageTitle>
+
+<h1>Working groups</h1>
+
+@if( this.Error != null )
+{
+    <div class="alert alert-danger">@this.Error</div>
+}
+
+@if( this.State.Groups.Count == 0 )
+{
+    <p>No working groups yet.</p>
+}
+
+@foreach( var group in this.State.Groups )
+{
+    var membership = this.CurrentUser == null ? null : group.FindMember( this.CurrentUser.Id );
+    var canManage = this.CurrentUser != null && group.IsLeadOrAdmin( this.CurrentUser );
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="d-flex justify-content-between">
+                <h5 class="card-title">@group.Name</h5>
+                <span class="badge text-bg-light">@group.JoinPolicy</span>
+            </div>
+
+            @if( group.Description.Length > 0 )
+            {
+                <p>@group.Description</p>
+            }
+
+            <h6>Members</h6>
+            <ul class="list-inline">
+                @foreach( var member in group.Members )
+                {
+                    <li class="list-inline-item">
+                        <span class="badge @( member.Pending ? "text-bg-warning" : member.IsLead ? "text-bg-primary" : "text-bg-secondary" )">
+                            @member.DisplayName@( member.IsLead ? " (lead)" : member.Pending ? " (pending)" : "" )
+                        </span>
+                        @if( member.Pending && canManage )
+                        {
+                            <button class="btn btn-sm btn-outline-success"
+                                    @onclick="() => this.ApproveAsync( group.Id, member.UserId )">
+                                Approve
+                            </button>
+                        }
+                    </li>
+                }
+            </ul>
+
+            @{
+                var assigned = this.State.ProposalsForGroup( group.Id );
+            }
+            @if( assigned.Count > 0 )
+            {
+                <h6>Assigned proposals</h6>
+                <ul>
+                    @foreach( var proposal in assigned )
+                    {
+                        <li>
+                            <a href="/proposals/@proposal.Id">@proposal.Title</a>
+                            <StatusBadge Status="proposal.Status" />
+                        </li>
+                    }
+                </ul>
+            }
+
+            @if( membership == null && group.JoinPolicy != JoinPolicy.Appointed )
+            {
+                <button class="btn btn-sm btn-primary"
+                        @onclick="() => this.JoinAsync( group.Id )">
+                    @( group.JoinPolicy == JoinPolicy.Approval ? "Request to join" : "Join" )
+                </button>
+            }
+
+            @if( canManage )
+            {
+                <div class="row g-2 align-items-center mt-2">
+                    <div class="col-auto">
+                        <select class="form-select form-select-sm" @bind="this.appointUserId">
+                            <option value="">Appoint member…</option>
+                            @foreach( var user in this.State.Users.Where( u => group.FindMember( u.Id ) == null ) )
+                            {
+                                <option value="@user.Id">@user.DisplayName</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-auto">
+                        <button class="btn btn-sm btn-outline-primary"
+                                @onclick="() => this.AppointAsync( group.Id )">
+                            Appoint
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@if( this.CurrentUser is { IsChair: true } )
+{
+    <h2 class="mt-4">New working group</h2>
+
+    <div class="col-12 col-md-6">
+        <div class="mb-2">
+            <input class="form-control" placeholder="Name" @bind="this.newName" />
+        </div>
+        <div class="mb-2">
+            <input class="form-control" placeholder="Description" @bind="this.newDescription" />
+        </div>
+        <div class="mb-2">
+            <select class="form-select" @bind="this.newPolicy">
+                <option value="@JoinPolicy.Open">Open — anyone can join</option>
+                <option value="@JoinPolicy.Approval">Approval — lead approves requests</option>
+                <option value="@JoinPolicy.Appointed">Appointed — members are appointed</option>
+            </select>
+        </div>
+        <button class="btn btn-primary" @onclick="this.CreateAsync">Create group</button>
+    </div>
+}
+
+@code {
+    private string newName = "";
+    private string newDescription = "";
+    private JoinPolicy newPolicy = JoinPolicy.Open;
+    private string appointUserId = "";
+
+    private async Task CreateAsync()
+        => await this.Run
+        (
+            async () =>
+            {
+                await this.State.CreateGroupAsync( this.newName, this.newDescription, this.newPolicy, this.CurrentUser! );
+                this.newName = "";
+                this.newDescription = "";
+            }
+        );
+
+    private async Task JoinAsync( string groupId )
+        => await this.Run( () => this.State.JoinGroupAsync( groupId, this.CurrentUser! ) );
+
+    private async Task ApproveAsync( string groupId, string userId )
+        => await this.Run( () => this.State.ApproveMemberAsync( groupId, userId, this.CurrentUser! ) );
+
+    private async Task AppointAsync( string groupId )
+        => await this.Run
+        (
+            async () =>
+            {
+                if( this.appointUserId == "" )
+                    return;
+
+                await this.State.AppointMemberAsync( groupId, this.appointUserId, this.CurrentUser! );
+                this.appointUserId = "";
+            }
+        );
+}

@@ -1,0 +1,35 @@
+@page "/register"
+
+<PageTitle>Register</PageTitle>
+
+<h1>Register</h1>
+
+<p>The first registered user becomes the administrator.</p>
+
+@if( this.Error != null )
+{
+    <div class="alert alert-danger">@this.Error</div>
+}
+
+<form method="post" action="/auth/register" class="col-12 col-md-4">
+    <div class="mb-3">
+        <label class="form-label" for="username">Username</label>
+        <input class="form-control" id="username" name="username" required />
+    </div>
+    <div class="mb-3">
+        <label class="form-label" for="displayname">Display name</label>
+        <input class="form-control" id="displayname" name="displayname" />
+    </div>
+    <div class="mb-3">
+        <label class="form-label" for="password">Password</label>
+        <input class="form-control" id="password" name="password" type="password" required />
+    </div>
+    <button type="submit" class="btn btn-primary">Register</button>
+</form>
+
+<p class="mt-3">Already registered? <a href="/login">Log in</a></p>
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? Error { get; set; }
+}

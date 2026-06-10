@@ -1,0 +1,23 @@
+<span class="badge @this.Css">@this.Label</span>
+
+@code {
+    [Parameter]
+    public ProposalStatus Status { get; set; }
+
+    private string Label => this.Status switch
+    {
+        ProposalStatus.InWorkingGroup => "In working group",
+        ProposalStatus.ReadyForSession => "Ready for session",
+        _ => this.Status.ToString(),
+    };
+
+    private string Css => this.Status switch
+    {
+        ProposalStatus.Draft => "text-bg-secondary",
+        ProposalStatus.InWorkingGroup => "text-bg-info",
+        ProposalStatus.ReadyForSession => "text-bg-primary",
+        ProposalStatus.Adopted => "text-bg-success",
+        ProposalStatus.Rejected => "text-bg-danger",
+        _ => "text-bg-light",
+    };
+}

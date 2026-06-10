@@ -1,0 +1,49 @@
+@page "/"
+@rendermode InteractiveServer
+@inherits LiveComponent
+
+<PageTitle>Assembly</PageTitle>
+
+<h1>Assembly</h1>
+
+<p class="lead">
+    Proposals, working groups, speakers lists and live voting
+    for assemblies and conventions.
+</p>
+
+<AuthorizeView>
+    <Authorized>
+        <div class="row g-3 mt-2">
+            <div class="col-12 col-md-4">
+                <a class="card text-decoration-none h-100" href="/proposals">
+                    <div class="card-body">
+                        <h5 class="card-title">Proposals</h5>
+                        <p class="card-text display-6">@this.State.Proposals.Count</p>
+                    </div>
+                </a>
+            </div>
+            <div class="col-12 col-md-4">
+                <a class="card text-decoration-none h-100" href="/groups">
+                    <div class="card-body">
+                        <h5 class="card-title">Working groups</h5>
+                        <p class="card-text display-6">@this.State.Groups.Count</p>
+                    </div>
+                </a>
+            </div>
+            <div class="col-12 col-md-4">
+                <a class="card text-decoration-none h-100" href="/sessions">
+                    <div class="card-body">
+                        <h5 class="card-title">Sessions</h5>
+                        <p class="card-text display-6">@this.State.Sessions.Count</p>
+                    </div>
+                </a>
+            </div>
+        </div>
+    </Authorized>
+    <NotAuthorized>
+        <p>
+            <a class="btn btn-primary" href="/register">Register</a>
+            <a class="btn btn-outline-primary" href="/login">Log in</a>
+        </p>
+    </NotAuthorized>
+</AuthorizeView>

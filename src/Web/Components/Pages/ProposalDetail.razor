@@ -1,0 +1,265 @@
+@page "/proposals/{Id}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inherits LiveComponent
+
+@if( this.Proposal == null )
+{
+    <h1>Proposal not found</h1>
+    return;
+}
+
+<PageTitle>@this.Proposal.Title</PageTitle>
+
+<h1>@this.Proposal.Title <StatusBadge Status="this.Proposal.Status" /></h1>
+
+<p class="text-muted">
+    Proposed by @this.Proposal.CreatedByName,
+    @this.Proposal.CreatedAtUtc.ToString( "yyyy-MM-dd" )
+    — currently v@(this.Proposal.Latest.Number)
+</p>
+
+@if( this.Error != null )
+{
+    <div class="alert alert-danger">@this.Error</div>
+}
+
+<h2>Current text</h2>
+
+<ol class="proposal-text">
+    @foreach( var clause in this.Proposal.Latest.Clauses )
+    {
+        <li>@clause.Text</li>
+    }
+</ol>
+
+@if( this.CurrentUser is { IsChair: true } )
+{
+    <div class="row g-2 align-items-end mb-4">
+        <div class="col-auto">
+            <label class="form-label">Status</label>
+            <select class="form-select" @bind="this.Status">
+                @foreach( var status in Enum.GetValues<ProposalStatus>() )
+                {
+                    <option value="@status">@status</option>
+                }
+            </select>
+        </div>
+        <div class="col-auto">
+            <label class="form-label">Working group</label>
+            <select class="form-select" @bind="this.GroupId">
+                <option value="">— none —</option>
+                @foreach( var group in this.State.Groups )
+                {
+                    <option value="@group.Id">@group.Name</option>
+                }
+            </select>
+        </div>
+    </div>
+}
+
+<h2>Amendments</h2>
+
+@if( this.Proposal.Amendments.Count == 0 )
+{
+    <p>No amendments proposed.</p>
+}
+
+@foreach( var amendment in this.Proposal.Amendments.OrderByDescending( a => a.CreatedAtUtc ) )
+{
+    <div class="card mb-2">
+        <div class="card-body">
+            <div class="d-flex justify-content-between">
+                <span>
+                    <strong>@amendment.Kind</strong>
+                    by @amendment.ProposedByName
+                    against v@(amendment.TargetVersion)
+                </span>
+                <span class="badge @BadgeFor( amendment.Status )">@amendment.Status</span>
+            </div>
+
+            <AmendmentDiff Proposal="this.Proposal" Amendment="amendment" />
+
+            @if( amendment.Status == AmendmentStatus.Proposed )
+            {
+                <div class="mt-2">
+                    @if( this.CurrentUser is { IsChair: true } )
+                    {
+                        <button class="btn btn-sm btn-success me-1"
+                                @onclick="() => this.SettleAsync( amendment.Id, AmendmentStatus.Accepted )">
+                            Accept
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger me-1"
+                                @onclick="() => this.SettleAsync( amendment.Id, AmendmentStatus.Rejected )">
+                            Reject
+                        </button>
+                    }
+                    @if( amendment.ProposedByUserId == this.CurrentUser?.Id )
+                    {
+                        <button class="btn btn-sm btn-outline-secondary"
+                                @onclick="() => this.SettleAsync( amendment.Id, AmendmentStatus.Withdrawn )">
+                            Withdraw
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+}
+
+<h3 class="mt-4">Propose an amendment</h3>
+
+<div class="col-12 col-md-8">
+    <div class="mb-2">
+        <label class="form-label">Kind</label>
+        <select class="form-select" @bind="this.amendmentKind">
+            <option value="@AmendmentKind.ReplaceClause">Replace clause</option>
+            <option value="@AmendmentKind.StrikeClause">Strike clause</option>
+            <option value="@AmendmentKind.InsertClauseAfter">Insert new clause after</option>
+        </select>
+    </div>
+    <div class="mb-2">
+        <label class="form-label">Clause</label>
+        <select class="form-select" @bind="this.amendmentClauseId">
+            @if( this.amendmentKind == AmendmentKind.InsertClauseAfter )
+            {
+                <option value="">— at the end —</option>
+            }
+            @foreach( var (clause, index) in this.Proposal.Latest.Clauses.Select( ( c, i ) => (c, i) ) )
+            {
+                <option value="@clause.Id">@(index + 1). @Truncate( clause.Text )</option>
+            }
+        </select>
+    </div>
+    @if( this.amendmentKind != AmendmentKind.StrikeClause )
+    {
+        <div class="mb-2">
+            <label class="form-label">New text</label>
+            <textarea class="form-control" rows="3" @bind="this.amendmentText"></textarea>
+        </div>
+    }
+    <button class="btn btn-primary" @onclick="this.ProposeAmendmentAsync">Propose amendment</button>
+</div>
+
+<h2 class="mt-4">Version history</h2>
+
+@foreach( var version in this.Proposal.Versions.AsEnumerable().Reverse() )
+{
+    <details class="mb-2">
+        <summary>
+            v@(version.Number) — @version.Note
+            (@version.CreatedByName, @version.CreatedAtUtc.ToString( "yyyy-MM-dd HH:mm" ))
+        </summary>
+        <ol class="proposal-text mt-2">
+            @foreach( var clause in version.Clauses )
+            {
+                <li>@clause.Text</li>
+            }
+        </ol>
+    </details>
+}
+
+<h3 class="mt-4">Publish new version</h3>
+
+<p class="text-muted">For working-group tuning: replaces the full text.</p>
+
+<div class="col-12 col-md-8">
+    <div class="mb-2">
+        <textarea class="form-control" rows="6" placeholder="One clause per line" @bind="this.newVersionText"></textarea>
+    </div>
+    <div class="mb-2">
+        <input class="form-control" placeholder="Note, e.g. 'Reworked by working group'" @bind="this.newVersionNote" />
+    </div>
+    <button class="btn btn-outline-primary" @onclick="this.AddVersionAsync">Publish version</button>
+</div>
+
+@code {
+    [Parameter]
+    public string Id { get; set; } = "";
+
+    private Proposal? Proposal => this.State.GetProposal( this.Id );
+
+    private AmendmentKind amendmentKind = AmendmentKind.ReplaceClause;
+    private string? amendmentClauseId;
+    private string amendmentText = "";
+    private string newVersionText = "";
+    private string newVersionNote = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        this.amendmentClauseId = this.Proposal?.Latest.Clauses.FirstOrDefault()?.Id;
+    }
+
+    private ProposalStatus Status
+    {
+        get => this.Proposal?.Status ?? ProposalStatus.Draft;
+        set => _ = this.Run( () => this.State.SetProposalStatusAsync( this.Id, value ) );
+    }
+
+    private string GroupId
+    {
+        get => this.Proposal?.WorkingGroupId ?? "";
+        set => _ = this.Run
+        (
+            () => this.State.AssignToGroupAsync
+            (
+                this.Id,
+                value == "" ? null : value
+            )
+        );
+    }
+
+    private async Task ProposeAmendmentAsync()
+        => await this.Run
+        (
+            async () =>
+            {
+                await this.State.ProposeAmendmentAsync
+                (
+                    this.Id,
+                    this.amendmentClauseId,
+                    this.amendmentKind,
+                    this.amendmentKind == AmendmentKind.StrikeClause ? null : this.amendmentText,
+                    this.CurrentUser!
+                );
+
+                this.amendmentText = "";
+            }
+        );
+
+    private async Task SettleAsync( string amendmentId, AmendmentStatus status )
+        => await this.Run
+        (
+            () => this.State.SetAmendmentStatusAsync( this.Id, amendmentId, status, this.CurrentUser! )
+        );
+
+    private async Task AddVersionAsync()
+        => await this.Run
+        (
+            async () =>
+            {
+                await this.State.AddVersionAsync
+                (
+                    this.Id,
+                    this.newVersionText,
+                    string.IsNullOrWhiteSpace( this.newVersionNote ) ? null : this.newVersionNote,
+                    this.CurrentUser!
+                );
+
+                this.newVersionText = "";
+                this.newVersionNote = "";
+            }
+        );
+
+    private static string Truncate( string text )
+        => text.Length <= 60 ? text : text[..57] + "…";
+
+    private static string BadgeFor( AmendmentStatus status ) => status switch
+    {
+        AmendmentStatus.Proposed => "text-bg-warning",
+        AmendmentStatus.Accepted => "text-bg-success",
+        AmendmentStatus.Rejected => "text-bg-danger",
+        _ => "text-bg-secondary",
+    };
+}

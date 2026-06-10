@@ -1,0 +1,98 @@
+@page "/projector/{Id}"
+@rendermode InteractiveServer
+@inherits LiveComponent
+
+@*
+    Big-screen view for the venue projector. Anonymous and read-only;
+    updates live as the chair and voters act.
+*@
+
+@if( this.Session == null )
+{
+    <h1>Session not found</h1>
+    return;
+}
+
+<PageTitle>@this.Session.Title — projector</PageTitle>
+
+<div class="projector">
+    <h1 class="projector-session">@this.Session.Title</h1>
+
+    @if( this.Item == null )
+    {
+        <p class="projector-idle">No agenda item is active.</p>
+    }
+    else
+    {
+        <h2 class="projector-item">@this.Item.Title</h2>
+
+        @if( this.Proposal != null )
+        {
+            <ol class="proposal-text projector-proposal">
+                @foreach( var clause in this.Proposal.Latest.Clauses )
+                {
+                    <li>@clause.Text</li>
+                }
+            </ol>
+        }
+
+        @if( this.Item.NowSpeaking is { } speaking )
+        {
+            <p class="projector-speaking">
+                🎤 @speaking.DisplayName
+                @( speaking.Kind == SpeakerKind.Reply ? " (reply)" : "" )
+            </p>
+        }
+
+        @if( this.Item.Queue.Count > 0 )
+        {
+            <p class="projector-next">Next: @this.NextSpeakers</p>
+        }
+
+        @foreach( var ballot in this.Ballots )
+        {
+            <div class="projector-ballot">
+                <h3>
+                    @ballot.Title
+                    <span class="badge @( ballot.State == BallotState.Open ? "text-bg-success" : "text-bg-secondary" )">
+                        @( ballot.State == BallotState.Open ? "voting open" : "result" )
+                    </span>
+                </h3>
+                <TallyBar Tally="this.State.TallyOf( ballot.Id )" />
+            </div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter]
+    public string Id { get; set; } = "";
+
+    private Session? Session => this.State.GetSession( this.Id );
+    private AgendaItem? Item => this.Session?.CurrentAgendaItem;
+
+    private Proposal? Proposal
+        => this.Item?.ProposalId == null
+            ? null
+            : this.State.GetProposal( this.Item.ProposalId );
+
+    private string NextSpeakers
+        => string.Join
+        (
+            ", ",
+            ( this.Item?.Queue ?? [] )
+                .Take( 5 )
+                .Select( s => s.DisplayName + ( s.Kind == SpeakerKind.Reply ? " (reply)" : "" ) )
+        );
+
+    private IEnumerable<Ballot> Ballots
+        => this.Session == null || this.Item == null
+            ? []
+            : this.State
+                .BallotsForSession( this.Session.Id )
+                .Where
+                (
+                    b => b.AgendaItemId == this.Item.Id
+                    && b.State != BallotState.Draft
+                );
+}

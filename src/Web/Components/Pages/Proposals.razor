@@ -1,0 +1,78 @@
+@page "/proposals"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@inherits LiveComponent
+@inject NavigationManager Navigation
+
+<PageTitle>Proposals</PageTitle>
+
+<h1>Proposals</h1>
+
+@if( this.Error != null )
+{
+    <div class="alert alert-danger">@this.Error</div>
+}
+
+@if( this.State.Proposals.Count == 0 )
+{
+    <p>No proposals yet.</p>
+}
+else
+{
+    <table class="table table-hover align-middle">
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>Status</th>
+                <th>Working group</th>
+                <th>Version</th>
+                <th>Amendments</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach( var proposal in this.State.Proposals )
+            {
+                var group = proposal.WorkingGroupId == null
+                    ? null
+                    : this.State.GetGroup( proposal.WorkingGroupId );
+
+                <tr>
+                    <td><a href="/proposals/@proposal.Id">@proposal.Title</a></td>
+                    <td><StatusBadge Status="proposal.Status" /></td>
+                    <td>@( group?.Name ?? "—" )</td>
+                    <td>v@(proposal.Latest.Number)</td>
+                    <td>@proposal.Amendments.Count</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+<h2 class="mt-4">New proposal</h2>
+
+<div class="col-12 col-md-8">
+    <div class="mb-3">
+        <label class="form-label">Title</label>
+        <input class="form-control" @bind="this.title" />
+    </div>
+    <div class="mb-3">
+        <label class="form-label">Text — one clause per line</label>
+        <textarea class="form-control" rows="6" @bind="this.text"></textarea>
+    </div>
+    <button class="btn btn-primary" @onclick="this.CreateAsync">Submit proposal</button>
+</div>
+
+@code {
+    private string title = "";
+    private string text = "";
+
+    private async Task CreateAsync()
+        => await this.Run
+        (
+            async () =>
+            {
+                var proposal = await this.State.CreateProposalAsync( this.title, this.text, this.CurrentUser! );
+                this.Navigation.NavigateTo( $"/proposals/{proposal.Id}" );
+            }
+        );
+}

@@ -1,0 +1,75 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  AZURE_LOCATION: westeurope
+  RESOURCE_GROUP: iptyphet-p-we-asmbly-rg
+  WEB_APP: iptyphet-p-we-asmbly-app
+
+jobs:
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: What-if
+        run: |
+          az deployment sub what-if \
+            --location "$AZURE_LOCATION" \
+            --template-file infra/main.bicep \
+            --name "asmbly-${{ github.run_number }}"
+
+      - name: Deploy
+        run: |
+          az deployment sub create \
+            --location "$AZURE_LOCATION" \
+            --template-file infra/main.bicep \
+            --name "asmbly-${{ github.run_number }}"
+
+  app:
+    runs-on: ubuntu-latest
+    needs: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: dotnet publish src/Web/AssemblyApp.Web.csproj -c Release -o publish
+
+      - name: Zip
+        run: cd publish && zip -qr ../publish.zip .
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to App Service
+        run: |
+          az webapp deploy \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEB_APP" \
+            --src-path publish.zip \
+            --type zip

@@ -3,6 +3,7 @@ name: deploy
 on:
   push:
     branches: [main]
+    paths: ['dotnet/**', '.github/workflows/deploy.yml']
   workflow_dispatch:
 
 permissions:
@@ -34,14 +35,14 @@ jobs:
         run: |
           az deployment sub what-if \
             --location "$AZURE_LOCATION" \
-            --template-file infra/main.bicep \
+            --template-file dotnet/infra/main.bicep \
             --name "asmbly-${{ github.run_number }}"
 
       - name: Deploy
         run: |
           az deployment sub create \
             --location "$AZURE_LOCATION" \
-            --template-file infra/main.bicep \
+            --template-file dotnet/infra/main.bicep \
             --name "asmbly-${{ github.run_number }}"
 
   app:
@@ -55,7 +56,7 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Publish
-        run: dotnet publish src/Web/AssemblyApp.Web.csproj -c Release -o publish
+        run: dotnet publish dotnet/src/Web/AssemblyApp.Web.csproj -c Release -o publish
 
       - name: Zip
         run: cd publish && zip -qr ../publish.zip .

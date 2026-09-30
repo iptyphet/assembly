@@ -3,8 +3,10 @@ name: ci
 on:
   pull_request:
     branches: [main]
+    paths: ['dotnet/**', '.github/workflows/ci.yml']
   push:
     branches: [main]
+    paths: ['dotnet/**', '.github/workflows/ci.yml']
   workflow_dispatch:
 
 permissions:
@@ -21,12 +23,12 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore
-        run: dotnet restore Assembly.slnx
+        run: dotnet restore dotnet/Assembly.slnx
 
       - name: Build
-        run: dotnet build Assembly.slnx -c Release --no-restore
+        run: dotnet build dotnet/Assembly.slnx -c Release --no-restore
 
       - name: Validate Bicep
         run: |
           az bicep install
-          az bicep build --file infra/main.bicep --stdout > /dev/null
+          az bicep build --file dotnet/infra/main.bicep --stdout > /dev/null

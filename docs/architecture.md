@@ -1,5 +1,13 @@
 # Architecture
 
+> **Two lanes, one repo.** This document describes the production .NET
+> lane (`dotnet/`, Blazor on Azure). The repo also contains a `php/`
+> lane: a deliberately simpler sandbox for exploring the same domain
+> concepts and JSON document structures on plain PHP hosting. It shares
+> the document layout and domain vocabulary below, but not the
+> one-process model — it has no in-memory state, no mutation gate, no
+> realtime, and no ballots. See `php/README.md`.
+
 ## Goals and constraints
 
 - Serve assemblies/conventions of organizations on a **shoestring budget**.

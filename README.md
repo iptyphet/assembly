@@ -8,15 +8,27 @@ The internal counterpart to [simplesubmit](../simplesubmit) (public idea
 funnel): ideas graduate into formal proposals here, get tuned by working
 groups, and are decided on the assembly floor.
 
-## Run locally
+## Two lanes
+
+- **`dotnet/`** — the production platform: Blazor Web App on Azure.
+  See below and [docs/architecture.md](docs/architecture.md).
+- **`php/`** — a dependency-free PHP sandbox for exploring the data
+  structures (document edits with version chains and diffs, sessions
+  calendar, speakers lists, proposal→session submissions) on any plain
+  PHP web host. See [php/README.md](php/README.md).
+
+The lanes share domain concepts and the JSON document layout, not code;
+inventions transfer between them as behavior, not merges.
+
+## Run locally (.NET lane)
 
 ```
-dotnet run --project src/Web
+dotnet run --project dotnet/src/Web
 ```
 
 Open the printed URL and register — the **first registered user becomes
-Admin**. State is stored as plain JSON files under `src/Web/data/` (gitignored);
-backing up the assembly = copying that folder.
+Admin**. State is stored as plain JSON files under `dotnet/src/Web/data/`
+(gitignored); backing up the assembly = copying that folder.
 
 ## Architecture in one paragraph
 
@@ -34,8 +46,8 @@ a SignalR backplane and shared state. See
 
 ```
 az login
-./scripts/provision.ps1     # creates rg, storage, plan, app (B1, ~€12/mo)
-./scripts/deploy.ps1        # dotnet publish + zip deploy
+./dotnet/scripts/provision.ps1     # creates rg, storage, plan, app (B1, ~€12/mo)
+./dotnet/scripts/deploy.ps1        # dotnet publish + zip deploy
 ```
 
 ## License

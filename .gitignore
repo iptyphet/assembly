@@ -482,6 +482,10 @@ $RECYCLE.BIN/
 *.swp
 
 # assembly: local JSON state and publish artifacts
-src/Web/data/
+dotnet/src/Web/data/
 publish/
 publish.zip
+
+# assembly php lane: local config and JSON state
+php/config.php
+php/data/

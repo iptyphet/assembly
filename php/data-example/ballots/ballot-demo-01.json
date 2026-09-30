@@ -1,0 +1,11 @@
+{
+    "id": "ballot-demo-01",
+    "sessionId": "demo-session-01",
+    "agendaItemId": "demo-agenda-02",
+    "proposalId": "demo-proposal-01",
+    "title": "Adopt: Meeting cadence and membership fees",
+    "status": "closed",
+    "createdByUserId": "user-chair-01",
+    "createdAtUtc": "2026-09-28T19:00:00Z",
+    "closedAtUtc": "2026-09-28T19:10:00Z"
+}

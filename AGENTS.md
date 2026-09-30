@@ -9,7 +9,9 @@ Deliberative assembly platform, two lanes sharing one repo:
 - `php/` — dependency-free PHP sandbox for exploring the domain's data
   structures (see `php/README.md`). The strict invariants below are
   .NET-lane rules; the PHP lane deliberately has no mutation gate, no
-  locking, no realtime, and no ballots.
+  locking, and no realtime. It does sketch users/roles, topics, and open
+  (roll-call) voting as sandbox experiments — secret ballots remain
+  .NET-only.
 
 ## Commands
 

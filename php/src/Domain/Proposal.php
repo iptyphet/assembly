@@ -41,6 +41,7 @@ final class ProposalVersion
     public function __construct(
         public readonly int $number,
         public readonly array $clauses,
+        public readonly string $createdByUserId,
         public readonly string $createdByName,
         public readonly string $createdAtUtc,
         public readonly ?string $note,
@@ -53,6 +54,7 @@ final class ProposalVersion
         return new self(
             (int) $data['number'],
             array_map(Clause::fromArray(...), array_values((array) $data['clauses'])),
+            (string) ($data['createdByUserId'] ?? ''),
             (string) ($data['createdByName'] ?? ''),
             (string) ($data['createdAtUtc'] ?? ''),
             isset($data['note']) ? (string) $data['note'] : null,
@@ -65,6 +67,7 @@ final class ProposalVersion
         return [
             'number' => $this->number,
             'clauses' => array_map(static fn (Clause $c): array => $c->toArray(), $this->clauses),
+            'createdByUserId' => $this->createdByUserId,
             'createdByName' => $this->createdByName,
             'createdAtUtc' => $this->createdAtUtc,
             'note' => $this->note,
@@ -92,6 +95,7 @@ final class Amendment
         public readonly string $kind,
         public readonly ?string $newText,
         public string $status,
+        public readonly string $proposedByUserId,
         public readonly string $proposedByName,
         public readonly string $createdAtUtc,
     ) {
@@ -107,6 +111,7 @@ final class Amendment
             (string) $data['kind'],
             isset($data['newText']) ? (string) $data['newText'] : null,
             (string) ($data['status'] ?? self::PROPOSED),
+            (string) ($data['proposedByUserId'] ?? ''),
             (string) ($data['proposedByName'] ?? ''),
             (string) ($data['createdAtUtc'] ?? ''),
         );
@@ -122,6 +127,7 @@ final class Amendment
             'kind' => $this->kind,
             'newText' => $this->newText,
             'status' => $this->status,
+            'proposedByUserId' => $this->proposedByUserId,
             'proposedByName' => $this->proposedByName,
             'createdAtUtc' => $this->createdAtUtc,
         ];
@@ -166,6 +172,7 @@ final class Proposal
         public string $status,
         public array $versions,
         public array $amendments,
+        public readonly string $createdByUserId,
         public readonly string $createdByName,
         public readonly string $createdAtUtc,
     ) {
@@ -174,7 +181,7 @@ final class Proposal
     /**
      * @param list<string> $clauseTexts
      */
-    public static function create(string $title, array $clauseTexts, string $authorName): self
+    public static function create(string $title, array $clauseTexts, User $author): self
     {
         $clauses = array_map(
             static fn (string $text): Clause => new Clause(Store::newId(), $text),
@@ -185,9 +192,10 @@ final class Proposal
             Store::newId(),
             $title,
             self::DRAFT,
-            [new ProposalVersion(1, $clauses, $authorName, Store::nowUtc(), null)],
+            [new ProposalVersion(1, $clauses, $author->id, $author->name, Store::nowUtc(), null)],
             [],
-            $authorName,
+            $author->id,
+            $author->name,
             Store::nowUtc(),
         );
     }
@@ -201,6 +209,7 @@ final class Proposal
             (string) ($data['status'] ?? self::DRAFT),
             array_map(ProposalVersion::fromArray(...), array_values((array) $data['versions'])),
             array_map(Amendment::fromArray(...), array_values((array) ($data['amendments'] ?? []))),
+            (string) ($data['createdByUserId'] ?? ''),
             (string) ($data['createdByName'] ?? ''),
             (string) ($data['createdAtUtc'] ?? ''),
         );
@@ -215,6 +224,7 @@ final class Proposal
             'status' => $this->status,
             'versions' => array_map(static fn (ProposalVersion $v): array => $v->toArray(), $this->versions),
             'amendments' => array_map(static fn (Amendment $a): array => $a->toArray(), $this->amendments),
+            'createdByUserId' => $this->createdByUserId,
             'createdByName' => $this->createdByName,
             'createdAtUtc' => $this->createdAtUtc,
         ];
@@ -291,14 +301,15 @@ final class Proposal
      * Accept an amendment: apply it to the latest version, append the new
      * immutable version, mark the amendment accepted.
      */
-    public function acceptAmendment(Amendment $amendment, string $authorName): void
+    public function acceptAmendment(Amendment $amendment, User $author): void
     {
         $latest = $this->latest();
         $clauses = self::applyAmendment($latest->clauses, $amendment);
         $this->versions[] = new ProposalVersion(
             $latest->number + 1,
             $clauses,
-            $authorName,
+            $author->id,
+            $author->name,
             Store::nowUtc(),
             'Accepted ' . Amendment::kindLabel($amendment->kind) . ' by ' . $amendment->proposedByName,
         );

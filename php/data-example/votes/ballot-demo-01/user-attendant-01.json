@@ -1,0 +1,8 @@
+{
+    "id": "user-attendant-01",
+    "ballotId": "ballot-demo-01",
+    "userId": "user-attendant-01",
+    "userName": "Jonas",
+    "choice": "for",
+    "castAtUtc": "2026-09-28T19:02:00Z"
+}

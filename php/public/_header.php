@@ -2,7 +2,10 @@
 
 declare(strict_types=1);
 
-$needsName = trim((string) ($_SESSION['display_name'] ?? '')) === '';
+$headerUser = current_user($store);
+$headerUsers = all_users($store);
+$headerBack = basename((string) $_SERVER['SCRIPT_NAME'])
+    . (($_SERVER['QUERY_STRING'] ?? '') !== '' ? '?' . $_SERVER['QUERY_STRING'] : '');
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -18,24 +21,22 @@ $needsName = trim((string) ($_SESSION['display_name'] ?? '')) === '';
     <nav>
         <a href="proposals.php">Proposals</a>
         <a href="sessions.php">Sessions</a>
-        <span class="whoami"><?= h(display_name()) ?></span>
+        <a href="topics.php">Topics</a>
+        <?php if ($headerUser->role === \Assembly\Domain\User::ADMIN): ?>
+            <a href="users.php">Users</a>
+        <?php endif; ?>
+        <form method="post" class="impersonate">
+            <input type="hidden" name="action" value="impersonate">
+            <input type="hidden" name="_back" value="<?= h($headerBack) ?>">
+            <select name="user" aria-label="Impersonate user">
+                <?php foreach ($headerUsers as $user): ?>
+                    <option value="<?= h($user->id) ?>" <?= $user->id === $headerUser->id ? 'selected' : '' ?>>
+                        <?= h($user->name) ?> (<?= h(\Assembly\Domain\User::roleLabel($user->role)) ?>)
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <button type="submit">Act as</button>
+        </form>
     </nav>
 </header>
-<?php if ($needsName): ?>
-    <form method="post" class="name-banner">
-        <input type="hidden" name="action" value="set-name">
-        <input type="hidden" name="_back" value="<?= h(basename((string) $_SERVER['SCRIPT_NAME']) . ($_SERVER['QUERY_STRING'] !== '' ? '?' . $_SERVER['QUERY_STRING'] : '')) ?>">
-        <label>Your display name (used as author and speaker default):
-            <input type="text" name="name" required autofocus>
-        </label>
-        <button type="submit">Set name</button>
-    </form>
-<?php else: ?>
-    <form method="post" class="name-banner subtle">
-        <input type="hidden" name="action" value="set-name">
-        <input type="hidden" name="_back" value="<?= h(basename((string) $_SERVER['SCRIPT_NAME']) . ($_SERVER['QUERY_STRING'] !== '' ? '?' . $_SERVER['QUERY_STRING'] : '')) ?>">
-        <label>Name: <input type="text" name="name" value="<?= h(display_name()) ?>" required></label>
-        <button type="submit">Change</button>
-    </form>
-<?php endif; ?>
 <main>

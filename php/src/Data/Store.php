@@ -6,8 +6,10 @@ namespace Assembly\Data;
 
 /**
  * Document store: one JSON file per aggregate, in a subdirectory per
- * aggregate type (proposals/{id}.json, sessions/{id}.json) — the same
+ * aggregate type (proposals/{id}.json, sessions/{id}.json, …) — the same
  * document-per-aggregate layout as the .NET lane's FileSystemDocumentStore.
+ * Votes use one nested level: votes/{ballotId}/{userId}.json, so one vote
+ * per user per ballot holds by key construction.
  *
  * Writes are atomic (temp file in the same directory + rename) and
  * pretty-printed so the documents stay readable and diff cleanly. There is
@@ -16,7 +18,7 @@ namespace Assembly\Data;
  */
 final class Store
 {
-    public const TYPES = ['proposals', 'sessions'];
+    public const TYPES = ['users', 'topics', 'proposals', 'sessions', 'ballots'];
 
     public function __construct(private readonly string $dataDir)
     {
@@ -106,11 +108,15 @@ final class Store
 
     private function assertType(string $type): string
     {
-        if (!in_array($type, self::TYPES, true)) {
-            throw new \InvalidArgumentException("Unknown document type \"$type\"");
+        if (in_array($type, self::TYPES, true)) {
+            return $type;
         }
-
-        return $type;
+        // One nested level: votes/{ballotId} — one vote document per user
+        // per ballot, uniqueness enforced by the document key.
+        if (preg_match('/^votes\/[a-z0-9-]+$/', $type)) {
+            return $type;
+        }
+        throw new \InvalidArgumentException("Unknown document type \"$type\"");
     }
 
     private function assertId(string $id): string

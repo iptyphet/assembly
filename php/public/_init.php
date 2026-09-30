@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Assembly\Data\Store;
+use Assembly\Domain\Session;
+use Assembly\Domain\User;
 use Assembly\Text\WordDiff;
 
 session_start();
@@ -17,18 +19,29 @@ $config += ['password' => '', 'data_dir' => dirname(__DIR__) . '/data', 'timezon
 
 date_default_timezone_set((string) $config['timezone']);
 
-// First run: seed data/ from data-example/ so diffs and queues are visible
-// immediately. data/ itself is gitignored.
-if (!is_dir($config['data_dir'])) {
-    $exampleDir = dirname(__DIR__) . '/data-example';
-    if (is_dir($exampleDir)) {
-        mkdir($config['data_dir'], 0775, true);
-        foreach (glob($exampleDir . '/*/*.json') ?: [] as $file) {
-            $subdir = $config['data_dir'] . '/' . basename(dirname($file));
-            if (!is_dir($subdir)) {
-                mkdir($subdir, 0775, true);
-            }
-            copy($file, $subdir . '/' . basename($file));
+// Seeding is per-subdirectory: any aggregate subdir missing from data/ is
+// copied from data-example/ independently (including one nested level, for
+// votes/{ballotId}/). Existing documents are never touched — so a deployed
+// data/ that predates a new aggregate type gains the new seeds on the next
+// request. data/ itself is gitignored.
+$exampleDir = dirname(__DIR__) . '/data-example';
+foreach (['users', 'topics', 'proposals', 'sessions', 'ballots', 'votes'] as $subdir) {
+    $target = $config['data_dir'] . '/' . $subdir;
+    $source = $exampleDir . '/' . $subdir;
+    if (is_dir($target) || !is_dir($source)) {
+        continue;
+    }
+    mkdir($target, 0775, true);
+    foreach (glob($source . '/*.json') ?: [] as $file) {
+        copy($file, $target . '/' . basename($file));
+    }
+    foreach (glob($source . '/*', GLOB_ONLYDIR) ?: [] as $nestedSource) {
+        $nestedTarget = $target . '/' . basename($nestedSource);
+        if (!is_dir($nestedTarget)) {
+            mkdir($nestedTarget, 0775, true);
+        }
+        foreach (glob($nestedSource . '/*.json') ?: [] as $file) {
+            copy($file, $nestedTarget . '/' . basename($file));
         }
     }
 }
@@ -36,7 +49,8 @@ if (!is_dir($config['data_dir'])) {
 $store = new Store((string) $config['data_dir']);
 
 // Auth gate: only active when a password is configured. Empty password =
-// no gate at all (local play). No users.json — just a session flag.
+// no gate at all (local play). Just a session flag; identity proper is the
+// impersonation below.
 $requiresLogin = (string) $config['password'] !== '';
 $script = basename((string) $_SERVER['SCRIPT_NAME']);
 if ($requiresLogin && empty($_SESSION['authed']) && $script !== 'login.php') {
@@ -44,21 +58,60 @@ if ($requiresLogin && empty($_SESSION['authed']) && $script !== 'login.php') {
     exit;
 }
 
-// Display name: free text stored in the session, used as version author and
-// speaker name default. Asked once (header banner), editable any time.
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set-name') {
-    $name = trim((string) ($_POST['name'] ?? ''));
-    if ($name !== '') {
-        $_SESSION['display_name'] = $name;
+// Impersonation: the session acts as one of the users from users/. No
+// passwords — this is a rehearsal sandbox, switch any time.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'impersonate') {
+    $userId = (string) ($_POST['user'] ?? '');
+    if ($store->load('users', $userId) !== null) {
+        $_SESSION['act_as_user_id'] = $userId;
     }
     redirect_back('index.php');
 }
 
-function display_name(): string
+/** All users, keyed by id, in creation order. */
+function all_users(Store $store): array
 {
-    $name = trim((string) ($_SESSION['display_name'] ?? ''));
+    $users = array_map(User::fromArray(...), $store->list('users'));
+    usort($users, static fn (User $a, User $b): int => strcmp($a->createdAtUtc, $b->createdAtUtc));
 
-    return $name === '' ? 'Anonymous' : $name;
+    return $users;
+}
+
+/** The impersonated user; falls back to the first user when stale/unset. */
+function current_user(Store $store): User
+{
+    $sessionId = (string) ($_SESSION['act_as_user_id'] ?? '');
+    if ($sessionId !== '') {
+        $data = $store->load('users', $sessionId);
+        if ($data !== null) {
+            return User::fromArray($data);
+        }
+    }
+    $users = all_users($store);
+    if ($users === []) {
+        throw new \RuntimeException('No users seeded — check data-example/users/.');
+    }
+
+    return $users[0];
+}
+
+function is_admin(Store $store): bool
+{
+    return current_user($store)->role === User::ADMIN;
+}
+
+/** Chairs and admins may create topics and sessions. */
+function is_chair(Store $store): bool
+{
+    return in_array(current_user($store)->role, [User::ADMIN, User::CHAIR], true);
+}
+
+/** The session owner (or an admin) steers the session. */
+function owns_session(Store $store, Session $session): bool
+{
+    $user = current_user($store);
+
+    return $user->role === User::ADMIN || $session->ownerUserId === $user->id;
 }
 
 /**
@@ -73,6 +126,13 @@ function redirect_back(string $default): never
     }
     header('Location: ' . $back);
     exit;
+}
+
+/** Reject an action the current role may not perform. */
+function forbid(): never
+{
+    http_response_code(403);
+    exit('Forbidden — your role may not perform this action.');
 }
 
 /** Render a UTC ISO-8601 timestamp in the configured timezone. */

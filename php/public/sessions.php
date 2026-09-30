@@ -3,12 +3,21 @@
 declare(strict_types=1);
 
 use Assembly\Domain\Session;
+use Assembly\Domain\Topic;
 
 require __DIR__ . '/_init.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
+    if (!is_chair($store)) {
+        forbid();
+    }
     $title = trim((string) ($_POST['title'] ?? ''));
     $whenLocal = trim((string) ($_POST['scheduled_for'] ?? ''));
+    $topicRaw = (string) ($_POST['topic'] ?? '');
+    $topicId = null;
+    if ($topicRaw !== '' && $store->load('topics', $topicRaw) !== null) {
+        $topicId = $topicRaw;
+    }
     $scheduledForUtc = null;
     if ($whenLocal !== '') {
         // datetime-local is entered in the configured timezone, stored as UTC.
@@ -18,7 +27,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         }
     }
     if ($title !== '') {
-        $session = Session::create($title, $scheduledForUtc);
+        // The chair who creates a session is its owner.
+        $session = Session::create($title, $scheduledForUtc, $topicId, current_user($store)->id);
         $store->save('sessions', $session->toArray());
     }
     redirect_back('sessions.php');
@@ -26,6 +36,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
 
 $sessions = array_map(Session::fromArray(...), $store->list('sessions'));
 usort($sessions, static fn (Session $a, Session $b): int => strcmp((string) $a->scheduledForUtc, (string) $b->scheduledForUtc));
+$topics = array_map(Topic::fromArray(...), $store->list('topics'));
+usort($topics, static fn (Topic $a, Topic $b): int => strcmp($a->title, $b->title));
 
 // Month calendar grid. Sessions are placed by their scheduled date in the
 // configured timezone.
@@ -56,6 +68,7 @@ require __DIR__ . '/_header.php';
 ?>
 <h1>Sessions</h1>
 
+<?php if (is_chair($store)): ?>
 <form method="post" class="card">
     <input type="hidden" name="action" value="create">
     <input type="hidden" name="_back" value="sessions.php">
@@ -63,11 +76,20 @@ require __DIR__ . '/_header.php';
     <label>Title
         <input type="text" name="title" required>
     </label>
+    <label>Topic
+        <select name="topic">
+            <option value="">— none —</option>
+            <?php foreach ($topics as $topic): ?>
+                <option value="<?= h($topic->id) ?>"><?= h($topic->title) ?></option>
+            <?php endforeach; ?>
+        </select>
+    </label>
     <label>Scheduled for (<?= h((string) $config['timezone']) ?>)
         <input type="datetime-local" name="scheduled_for">
     </label>
     <button type="submit">Create session</button>
 </form>
+<?php endif; ?>
 
 <section class="card">
     <h2>
@@ -116,16 +138,44 @@ require __DIR__ . '/_header.php';
     </table>
 </section>
 
-<div class="card-list">
-<?php foreach ($sessions as $session): ?>
+<?php
+$grouped = [];
+foreach ($sessions as $session) {
+    $grouped[$session->topicId ?? ''][] = $session;
+}
+$renderSessionCard = static function (Session $session): void {
+    ?>
     <div class="card">
-        <h2><a href="session.php?id=<?= h($session->id) ?>"><?= h($session->title) ?></a></h2>
+        <h2>
+            <a href="session.php?id=<?= h($session->id) ?>"><?= h($session->title) ?></a>
+            <span class="badge status-<?= h($session->status) ?>"><?= h(Session::statusLabel($session->status)) ?></span>
+        </h2>
         <p class="meta">
             <?= h(fmt_time($session->scheduledForUtc)) ?> ·
             <?= count($session->agendaItems) ?> agenda item(s) ·
             <a href="json.php?type=sessions&id=<?= h($session->id) ?>">view JSON</a>
         </p>
     </div>
+    <?php
+};
+?>
+<?php foreach ($topics as $topic): ?>
+    <?php if (($grouped[$topic->id] ?? []) === []) {
+        continue;
+    } ?>
+    <h2><a href="topic.php?id=<?= h($topic->id) ?>"><?= h($topic->title) ?></a></h2>
+    <div class="card-list">
+        <?php foreach ($grouped[$topic->id] as $session) {
+            $renderSessionCard($session);
+        } ?>
+    </div>
 <?php endforeach; ?>
-</div>
+<?php if (($grouped[''] ?? []) !== []): ?>
+    <h2>No topic</h2>
+    <div class="card-list">
+        <?php foreach ($grouped[''] as $session) {
+            $renderSessionCard($session);
+        } ?>
+    </div>
+<?php endif; ?>
 <?php require __DIR__ . '/_footer.php'; ?>

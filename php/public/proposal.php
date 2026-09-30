@@ -25,6 +25,7 @@ $back = 'proposal.php?id=' . $id;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string) ($_POST['action'] ?? '');
+    $me = current_user($store);
 
     if ($action === 'add-amendment') {
         $kind = (string) ($_POST['kind'] ?? '');
@@ -46,7 +47,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $kind,
                 $kind === Amendment::STRIKE ? null : $newText,
                 Amendment::PROPOSED,
-                display_name(),
+                $me->id,
+                $me->name,
                 Store::nowUtc(),
             );
             $store->save('proposals', $proposal->toArray());
@@ -55,7 +57,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $amendment = $proposal->amendment((string) ($_POST['amendment'] ?? ''));
         if ($amendment !== null && $amendment->status === Amendment::PROPOSED) {
             if ($action === 'accept-amendment') {
-                $proposal->acceptAmendment($amendment, display_name());
+                $proposal->acceptAmendment($amendment, $me);
             } else {
                 $amendment->status = Amendment::REJECTED;
             }
@@ -65,10 +67,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $sessionData = $store->load('sessions', (string) ($_POST['session'] ?? ''));
         if ($sessionData !== null) {
             $session = Session::fromArray($sessionData);
-            $session->agendaItems[] = AgendaItem::create($proposal->title, $proposal->id);
-            $store->save('sessions', $session->toArray());
-            $proposal->status = Proposal::READY_FOR_SESSION;
-            $store->save('proposals', $proposal->toArray());
+            if ($session->status !== Session::CLOSED) {
+                $session->agendaItems[] = AgendaItem::create($proposal->title, $proposal->id);
+                $store->save('sessions', $session->toArray());
+                $proposal->status = Proposal::READY_FOR_SESSION;
+                $store->save('proposals', $proposal->toArray());
+            }
         }
     }
 
@@ -95,7 +99,10 @@ $versionText = static fn ($v): string => implode(' ', array_map(
     $v->clauses,
 ));
 
-$sessions = array_map(Session::fromArray(...), $store->list('sessions'));
+$sessions = array_values(array_filter(
+    array_map(Session::fromArray(...), $store->list('sessions')),
+    static fn (Session $s): bool => $s->status !== Session::CLOSED,
+));
 
 /** Rendered preview of an amendment against the latest version. */
 $amendmentPreview = static function (Amendment $a) use ($latest): string {

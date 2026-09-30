@@ -13,7 +13,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         explode("\n", (string) ($_POST['clauses'] ?? '')),
     ), static fn (string $line): bool => $line !== ''));
     if ($title !== '' && $clauses !== []) {
-        $proposal = Proposal::create($title, $clauses, display_name());
+        $proposal = Proposal::create($title, $clauses, current_user($store));
         $store->save('proposals', $proposal->toArray());
     }
     redirect_back('proposals.php');

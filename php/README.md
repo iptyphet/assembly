@@ -14,31 +14,74 @@ php -S localhost:8000 -t public
 No framework, no Composer, no build step, no JavaScript — pure
 server-rendered PRG (POST → redirect → GET). Requires PHP 8+.
 
-On first run, `data/` is seeded from `data-example/` so version diffs,
-a pending amendment, and a speakers queue are visible immediately.
-`data/` and `config.php` are gitignored.
+On first run — and whenever a new aggregate type appears — `data/` is
+seeded **per subdirectory** from `data-example/`: any of
+`users/topics/proposals/sessions/ballots/votes` missing from `data/` is
+copied over independently, without touching existing documents. `data/`
+and `config.php` are gitignored.
 
 ## Configuration
 
 Optional: copy `config.example.php` to `config.php` and adjust.
 
 - `password` — empty string = **no login gate at all** (local play).
-  Set one to get a session-based login page. There are no user accounts.
+  Set one to get a session-based login page (a site password, not
+  per-user auth).
 - `data_dir` — where the JSON documents live.
 - `timezone` — display timezone (stored timestamps are always UTC ISO-8601).
 
-Display name is a free-text session value (asked once, editable in the
-header), used as version author and speaker name default.
+## Users and roles
+
+Identity is **impersonation**: the header dropdown switches which user the
+session acts as. No passwords, no registration — users are documents in
+`users/`, managed on the admin-only `users.php` page. Roles mirror the
+.NET lane's vocabulary:
+
+- **attendant** — create proposals, submit them to sessions, apply for
+  speaker slots, vote on open ballots.
+- **chair** — + create topics and sessions. The chair who creates a
+  session is its **owner**.
+- **session owner (or admin)** — set the session's original proposal,
+  manage the agenda, start/close the session, rearrange the speakers
+  queue, assign speaking time, open/close ballots.
+- **admin** — + user management.
+
+All checks are server-side in the POST handlers (rejected with 403);
+buttons are hidden when the current role may not use them.
+
+## Topics
+
+A topic (`topics/{id}.json`) groups related sessions — title plus a
+free-text description. Chairs create them; each session optionally belongs
+to one. The sessions list groups by topic, and the session owner pins an
+**original proposal** — "the proposal under discussion" — at the top of
+the session page. Attendants can still submit further proposals as agenda
+items.
+
+## Voting
+
+Open ballots only — an open ballot is a **roll call**, the tally shows who
+voted what. The session owner opens a ballot on an agenda item with a
+linked proposal (only while the session is `live`) and closes it when
+done. Choices are `for` / `against` / `abstain` (the ternary model of the
+.NET lane). Votes are individual documents keyed
+`votes/{ballotId}/{userId}.json`, so one vote per user per ballot holds
+**by key construction** and re-voting is an idempotent overwrite. Tallies
+are recomputed from the vote documents on every render — no counters to
+drift. Secret ballots remain out of scope.
 
 ## Data layout
 
-Document-per-aggregate, mirroring the .NET lane's storage layout but with
-only two document types (no users/groups/ballots/votes):
+Document-per-aggregate, mirroring the .NET lane's storage layout:
 
 ```
 data/
+├── users/{id}.json       # id, name, role
+├── topics/{id}.json      # id, title, description
 ├── proposals/{id}.json   # aggregate: immutable version chain + amendments embedded
-└── sessions/{id}.json    # aggregate: agenda items + speakers embedded
+├── sessions/{id}.json    # aggregate: agenda items + speakers embedded
+├── ballots/{id}.json     # open ballot on an agenda item's proposal
+└── votes/{ballotId}/{userId}.json   # one vote per user per ballot, by key
 ```
 
 Writes are atomic (temp file + rename) and pretty-printed. Every detail
@@ -60,15 +103,26 @@ Required GitHub secrets on this repo:
 
 ## What's here
 
+- Users and impersonation: switch who you act as from the header; roles
+  (admin / chair / attendant) gate actions server-side.
+- Topics grouping sessions, with a per-session original proposal pinned
+  as "the proposal under discussion".
 - Proposals: immutable version chains (clauses), per-clause amendments
   (replace / strike / insert-after) with word-level `<del>`/`<ins>` diff
   previews (`src/Text/WordDiff.php`, a straight port of the .NET
   `Core/Text/WordDiff.cs`), accept-amendment → new version, diff between
   any two versions. Nothing is ever edited in place.
-- Sessions: scheduled date/time, list view plus a month calendar grid.
-- Speakers lists per agenda item: speeches and replies; the queue is
-  replies first, then FIFO (Nordic innlegg/replikk convention, mirroring
-  `AgendaItem.Queue` in the C#); now-speaking and mark-done buttons.
+- Sessions: scheduled date/time, list view grouped by topic plus a month
+  calendar grid; owner starts (→ live) and closes the session.
+- Speakers lists per agenda item: attendants apply for speeches and
+  replies; the default queue is replies first, then FIFO (Nordic
+  innlegg/replikk convention, mirroring `AgendaItem.Queue` in the C#).
+  The owner can rearrange with up/down buttons (first move snapshots the
+  order into `manualOrder`), assign minutes per entry, and run
+  now-speaking / mark-done.
+- Open voting: owner opens/closes ballots on agenda items with linked
+  proposals while the session is live; everyone votes for / against /
+  abstain; tallies and per-user votes render live.
 - Submit a proposal to a session → linked agenda item + status change.
 
 ## What's deliberately missing vs the .NET lane
@@ -78,8 +132,10 @@ Required GitHub secrets on this repo:
   files. Single-user local play only.
 - **No realtime.** No `AppState.Changed`, no live re-render, no polling —
   reload the page.
-- **No ballots or voting** of any kind.
-- **No users or roles.** At most a shared password and a session display
-  name; nothing like the .NET lane's identity model.
+- **No secret ballots** or vote anonymity of any kind — every ballot here
+  is a roll call. The .NET lane's HMAC-handle model is not ported.
+- **No real auth.** Impersonation is a dropdown, the optional site
+  password is a shared session flag; nothing like the .NET lane's
+  identity model.
 - No second instance, no database — same "folder of JSON is the truth"
   philosophy, minus the in-memory copy.

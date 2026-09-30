@@ -1,0 +1,32 @@
+name: php-lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'php/**'
+      - '.github/workflows/php-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'php/**'
+      - '.github/workflows/php-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+
+      - name: Lint all PHP files
+        run: |
+          fail=0
+          while IFS= read -r file; do
+            php -l "$file" || fail=1
+          done < <(find php -name '*.php' -type f)
+          exit $fail

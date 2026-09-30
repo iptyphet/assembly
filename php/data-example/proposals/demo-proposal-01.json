@@ -1,0 +1,71 @@
+{
+    "id": "demo-proposal-01",
+    "title": "Meeting cadence and membership fees",
+    "status": "draft",
+    "versions": [
+        {
+            "number": 1,
+            "clauses": [
+                {
+                    "id": "demo-clause-1a",
+                    "text": "The assembly shall meet twice a year in the main hall."
+                },
+                {
+                    "id": "demo-clause-1b",
+                    "text": "Membership fees are set at 200 kroner per year."
+                },
+                {
+                    "id": "demo-clause-1c",
+                    "text": "Decisions require a simple majority of those present."
+                }
+            ],
+            "createdByName": "Demo Author",
+            "createdAtUtc": "2026-09-20T10:00:00Z",
+            "note": null
+        },
+        {
+            "number": 2,
+            "clauses": [
+                {
+                    "id": "demo-clause-2a",
+                    "text": "The assembly shall meet twice a year in the main hall."
+                },
+                {
+                    "id": "demo-clause-2b",
+                    "text": "Membership fees are set at 250 kroner per year."
+                },
+                {
+                    "id": "demo-clause-1c",
+                    "text": "Decisions require a simple majority of those present."
+                }
+            ],
+            "createdByName": "Demo Author",
+            "createdAtUtc": "2026-09-22T14:30:00Z",
+            "note": "Accepted Replace clause by Kari Nordmann"
+        }
+    ],
+    "amendments": [
+        {
+            "id": "demo-amendment-01",
+            "targetVersion": 1,
+            "clauseId": "demo-clause-1b",
+            "kind": "replace_clause",
+            "newText": "Membership fees are set at 250 kroner per year.",
+            "status": "accepted",
+            "proposedByName": "Kari Nordmann",
+            "createdAtUtc": "2026-09-21T09:15:00Z"
+        },
+        {
+            "id": "demo-amendment-02",
+            "targetVersion": 2,
+            "clauseId": "demo-clause-1c",
+            "kind": "replace_clause",
+            "newText": "Decisions require a two-thirds majority of members present.",
+            "status": "proposed",
+            "proposedByName": "Ola Hansen",
+            "createdAtUtc": "2026-09-25T16:45:00Z"
+        }
+    ],
+    "createdByName": "Demo Author",
+    "createdAtUtc": "2026-09-20T10:00:00Z"
+}

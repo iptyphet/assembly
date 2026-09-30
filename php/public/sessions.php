@@ -1,0 +1,131 @@
+<?php
+
+declare(strict_types=1);
+
+use Assembly\Domain\Session;
+
+require __DIR__ . '/_init.php';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'create') {
+    $title = trim((string) ($_POST['title'] ?? ''));
+    $whenLocal = trim((string) ($_POST['scheduled_for'] ?? ''));
+    $scheduledForUtc = null;
+    if ($whenLocal !== '') {
+        // datetime-local is entered in the configured timezone, stored as UTC.
+        $dt = \DateTimeImmutable::createFromFormat('Y-m-d\TH:i', $whenLocal, new \DateTimeZone((string) $config['timezone']));
+        if ($dt !== false) {
+            $scheduledForUtc = $dt->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d\TH:i:s\Z');
+        }
+    }
+    if ($title !== '') {
+        $session = Session::create($title, $scheduledForUtc);
+        $store->save('sessions', $session->toArray());
+    }
+    redirect_back('sessions.php');
+}
+
+$sessions = array_map(Session::fromArray(...), $store->list('sessions'));
+usort($sessions, static fn (Session $a, Session $b): int => strcmp((string) $a->scheduledForUtc, (string) $b->scheduledForUtc));
+
+// Month calendar grid. Sessions are placed by their scheduled date in the
+// configured timezone.
+$month = (string) ($_GET['month'] ?? '');
+if (!preg_match('/^\d{4}-\d{2}$/', $month)) {
+    $month = (new \DateTimeImmutable('now'))->format('Y-m');
+}
+$firstOfMonth = new \DateTimeImmutable($month . '-01');
+$prevMonth = $firstOfMonth->modify('-1 month')->format('Y-m');
+$nextMonth = $firstOfMonth->modify('+1 month')->format('Y-m');
+
+$byDate = [];
+foreach ($sessions as $session) {
+    if ($session->scheduledForUtc === null) {
+        continue;
+    }
+    $localDate = (new \DateTimeImmutable($session->scheduledForUtc))
+        ->setTimezone(new \DateTimeZone((string) $config['timezone']))
+        ->format('Y-m-d');
+    $byDate[$localDate][] = $session;
+}
+
+$daysInMonth = (int) $firstOfMonth->format('t');
+$firstWeekday = (int) $firstOfMonth->format('N'); // 1 = Monday
+
+$pageTitle = 'Assembly sandbox — Sessions';
+require __DIR__ . '/_header.php';
+?>
+<h1>Sessions</h1>
+
+<form method="post" class="card">
+    <input type="hidden" name="action" value="create">
+    <input type="hidden" name="_back" value="sessions.php">
+    <h2>New session</h2>
+    <label>Title
+        <input type="text" name="title" required>
+    </label>
+    <label>Scheduled for (<?= h((string) $config['timezone']) ?>)
+        <input type="datetime-local" name="scheduled_for">
+    </label>
+    <button type="submit">Create session</button>
+</form>
+
+<section class="card">
+    <h2>
+        <a href="sessions.php?month=<?= h($prevMonth) ?>">←</a>
+        <?= h($firstOfMonth->format('F Y')) ?>
+        <a href="sessions.php?month=<?= h($nextMonth) ?>">→</a>
+    </h2>
+    <table class="calendar">
+        <thead>
+            <tr>
+                <?php foreach (['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as $day): ?>
+                    <th><?= $day ?></th>
+                <?php endforeach; ?>
+            </tr>
+        </thead>
+        <tbody>
+            <?php
+            $cell = 0;
+            $day = 1;
+            while ($day <= $daysInMonth):
+            ?>
+                <tr>
+                    <?php for ($col = 1; $col <= 7; $col++): ?>
+                        <?php if ($cell < $firstWeekday - 1 || $day > $daysInMonth): ?>
+                            <td class="empty"></td>
+                        <?php else: ?>
+                            <?php
+                            $date = sprintf('%s-%02d', $month, $day);
+                            $daySessions = $byDate[$date] ?? [];
+                            ?>
+                            <td>
+                                <span class="day-number"><?= $day ?></span>
+                                <?php foreach ($daySessions as $session): ?>
+                                    <a class="calendar-session" href="session.php?id=<?= h($session->id) ?>">
+                                        <?= h($session->title) ?>
+                                    </a>
+                                <?php endforeach; ?>
+                            </td>
+                            <?php $day++; ?>
+                        <?php endif; ?>
+                        <?php $cell++; ?>
+                    <?php endfor; ?>
+                </tr>
+            <?php endwhile; ?>
+        </tbody>
+    </table>
+</section>
+
+<div class="card-list">
+<?php foreach ($sessions as $session): ?>
+    <div class="card">
+        <h2><a href="session.php?id=<?= h($session->id) ?>"><?= h($session->title) ?></a></h2>
+        <p class="meta">
+            <?= h(fmt_time($session->scheduledForUtc)) ?> ·
+            <?= count($session->agendaItems) ?> agenda item(s) ·
+            <a href="json.php?type=sessions&id=<?= h($session->id) ?>">view JSON</a>
+        </p>
+    </div>
+<?php endforeach; ?>
+</div>
+<?php require __DIR__ . '/_footer.php'; ?>

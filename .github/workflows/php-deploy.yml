@@ -50,8 +50,9 @@ jobs:
       - name: Set site password from secret
         env:
           ASSEMBLY_PASSWORD: ${{ secrets.ASSEMBLY_PASSWORD }}
-        if: ${{ secrets.ASSEMBLY_PASSWORD != '' }}
-        run: >
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=deployment/known_hosts -o StrictHostKeyChecking=yes
-          fifle@login.domeneshop.no
-          "sed -i \"s/'password' => '.*'/'password' => '$ASSEMBLY_PASSWORD'/\" apps/assembly/config.php"
+        run: |
+          if [ -n "$ASSEMBLY_PASSWORD" ]; then
+            ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=deployment/known_hosts -o StrictHostKeyChecking=yes \
+              fifle@login.domeneshop.no \
+              "sed -i \"s/'password' => '.*'/'password' => '$ASSEMBLY_PASSWORD'/\" apps/assembly/config.php"
+          fi

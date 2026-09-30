@@ -1,0 +1,57 @@
+name: Deploy PHP sandbox (main → fifle.net/assembly)
+
+on:
+  push:
+    branches: [main]
+    paths: ['php/**', 'deployment/**', '.github/workflows/php-deploy.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-php-fifle
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SSH deploy key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      # The app lives outside the web root; www/assembly is a symlink to
+      # its public/ folder. config.php and data/ live only on the server
+      # (live data is server-authoritative), so rsync must not delete
+      # them.
+      - name: Rsync app to ~/apps/assembly
+        run: >
+          rsync -az --delete
+          --exclude config.php --exclude data/
+          -e "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=deployment/known_hosts -o StrictHostKeyChecking=yes"
+          php/ fifle@login.domeneshop.no:apps/assembly/
+
+      - name: Seed config.php and data/ on first deploy; ensure web symlink
+        run: >
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=deployment/known_hosts -o StrictHostKeyChecking=yes
+          fifle@login.domeneshop.no "
+          cp -n apps/assembly/config.example.php apps/assembly/config.php;
+          test -d apps/assembly/data || cp -r apps/assembly/data-example apps/assembly/data;
+          ln -sfn \$HOME/apps/assembly/public \$HOME/www/assembly"
+
+      # ASSEMBLY_PASSWORD secret (optional): when set, the site password in
+      # the server-side config.php is updated on every deploy — rotate by
+      # changing the secret. Avoid single quotes in the password.
+      - name: Set site password from secret
+        env:
+          ASSEMBLY_PASSWORD: ${{ secrets.ASSEMBLY_PASSWORD }}
+        if: ${{ secrets.ASSEMBLY_PASSWORD != '' }}
+        run: >
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o UserKnownHostsFile=deployment/known_hosts -o StrictHostKeyChecking=yes
+          fifle@login.domeneshop.no
+          "sed -i \"s/'password' => '.*'/'password' => '$ASSEMBLY_PASSWORD'/\" apps/assembly/config.php"

@@ -45,6 +45,19 @@ Writes are atomic (temp file + rename) and pretty-printed. Every detail
 page has a **view JSON** link — inspecting the document structure is the
 point of the sandbox.
 
+## Deploy to fifle.net
+
+`.github/workflows/php-deploy.yml` deploys pushes touching `php/**` to
+**https://www.fifle.net/assembly** (domeneshop): rsync to
+`~/apps/assembly/`, with `~/www/assembly` symlinked to `public/`.
+`config.php` and `data/` live only on the server and are never clobbered.
+
+Required GitHub secrets on this repo:
+
+- `DEPLOY_KEY` — private SSH key authorized for `fifle@login.domeneshop.no`
+- `ASSEMBLY_PASSWORD` (optional) — when set, the site password in the
+  server-side `config.php` is updated on every deploy
+
 ## What's here
 
 - Proposals: immutable version chains (clauses), per-clause amendments

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Assembly\Data\Store;
 use Assembly\Domain\AgendaItem;
+use Assembly\Domain\Amendment;
 use Assembly\Domain\Ballot;
 use Assembly\Domain\Proposal;
 use Assembly\Domain\Session;
@@ -161,6 +162,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $ballot = Ballot::fromArray($ballotData);
             $ballot->status = Ballot::CLOSED;
             $ballot->closedAtUtc = Store::nowUtc();
+            // Amendment ballots decide the amendment on close: for > against
+            // applies the patch as a new immutable version, otherwise the
+            // amendment is rejected and the proposal stays untouched.
+            // Abstains don't count either way.
+            if ($ballot->amendmentId !== null) {
+                $proposalData = $store->load('proposals', $ballot->proposalId);
+                if ($proposalData !== null) {
+                    $proposal = Proposal::fromArray($proposalData);
+                    $amendment = $proposal->amendment($ballot->amendmentId);
+                    if ($amendment !== null && $amendment->status === Amendment::PROPOSED) {
+                        $tally = Ballot::tally($store->list('votes/' . $ballot->id));
+                        if ($tally[Ballot::FOR] > $tally[Ballot::AGAINST]) {
+                            $proposal->acceptAmendment($amendment, $me);
+                        } else {
+                            $amendment->status = Amendment::REJECTED;
+                        }
+                        $store->save('proposals', $proposal->toArray());
+                    }
+                }
+            }
             $store->save('ballots', $ballot->toArray());
         }
     } elseif ($action === 'vote') {
@@ -402,6 +423,27 @@ require __DIR__ . '/_header.php';
                             <strong><?= h($ballot->title) ?></strong>
                             <span class="badge ballot-<?= h($ballot->status) ?>"><?= h($ballot->status) ?></span>
                         </p>
+                        <?php if ($ballot->amendmentId !== null): ?>
+                            <p class="meta">
+                                Amendment vote —
+                                <a href="proposal.php?id=<?= h($ballot->proposalId) ?>">amendment on the proposal ↗</a>
+                            </p>
+                            <?php if ($ballot->status === Ballot::CLOSED): ?>
+                                <?php
+                                $outcomeProposal = isset($proposals[$ballot->proposalId]) ? $proposals[$ballot->proposalId] : null;
+                                $outcome = $outcomeProposal?->amendment($ballot->amendmentId);
+                                ?>
+                                <?php if ($outcome !== null): ?>
+                                    <p class="ballot-outcome">
+                                        <?php if ($outcome->status === Amendment::ACCEPTED): ?>
+                                            Amendment <strong>accepted</strong> (<?= $tally[Ballot::FOR] ?> for, <?= $tally[Ballot::AGAINST] ?> against) — applied as a new version.
+                                        <?php elseif ($outcome->status === Amendment::REJECTED): ?>
+                                            Amendment <strong>rejected</strong> (<?= $tally[Ballot::FOR] ?> for, <?= $tally[Ballot::AGAINST] ?> against) — the proposal is unchanged.
+                                        <?php endif; ?>
+                                    </p>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                        <?php endif; ?>
                         <p class="tally">
                             For: <?= $tally[Ballot::FOR] ?> ·
                             Against: <?= $tally[Ballot::AGAINST] ?> ·

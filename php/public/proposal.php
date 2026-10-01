@@ -2,10 +2,15 @@
 
 declare(strict_types=1);
 
+use Assembly\Ai\PatchException;
+use Assembly\Ai\PatchValidator;
 use Assembly\Data\Store;
 use Assembly\Domain\AgendaItem;
 use Assembly\Domain\Amendment;
+use Assembly\Domain\AmendmentRevision;
+use Assembly\Domain\Ballot;
 use Assembly\Domain\Proposal;
+use Assembly\Domain\ProposalVersion;
 use Assembly\Domain\Session;
 
 require __DIR__ . '/_init.php';
@@ -23,39 +28,137 @@ if ($data === null) {
 $proposal = Proposal::fromArray($data);
 $back = 'proposal.php?id=' . $id;
 
+/**
+ * Agenda items linked to this proposal in non-closed sessions — the
+ * possible homes for an amendment ballot. Keyed "sessionId:itemId".
+ *
+ * @return array<string, array{session: Session, item: AgendaItem}>
+ */
+$votableItems = function () use ($store, $proposal): array {
+    $result = [];
+    foreach ($store->list('sessions') as $sdata) {
+        $session = Session::fromArray($sdata);
+        if ($session->status === Session::CLOSED) {
+            continue;
+        }
+        foreach ($session->agendaItems as $item) {
+            if ($item->proposalId === $proposal->id) {
+                $result[$session->id . ':' . $item->id] = ['session' => $session, 'item' => $item];
+            }
+        }
+    }
+
+    return $result;
+};
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = (string) ($_POST['action'] ?? '');
     $me = current_user($store);
+    $latestNow = $proposal->latest();
 
-    if ($action === 'add-amendment') {
-        $kind = (string) ($_POST['kind'] ?? '');
-        $clauseRaw = (string) ($_POST['clause'] ?? '');
-        $clauseId = $clauseRaw === 'top' ? null : $clauseRaw;
-        $newText = trim((string) ($_POST['new_text'] ?? ''));
-        $clauseExists = $clauseId === null || array_filter(
-            $proposal->latest()->clauses,
-            static fn ($c): bool => $c->id === $clauseId,
-        ) !== [];
-        $textOk = $kind === Amendment::STRIKE || $newText !== '';
-        // Null clause id is only meaningful as "insert at the top".
-        $clauseOk = $clauseId !== null || $kind === Amendment::INSERT_AFTER;
-        if (in_array($kind, Amendment::KINDS, true) && $clauseExists && $clauseOk && $textOk) {
+    if ($action === 'ask-ai' || $action === 'add-amendment') {
+        // Both paths create a DRAFT amendment with a first revision — the
+        // AI path via the configured provider, the manual path from the
+        // form fields. Same machinery, no special AI patch type.
+        $ask = trim((string) ($_POST['ask'] ?? ''));
+        try {
+            if ($action === 'ask-ai') {
+                if ($ask === '') {
+                    throw new PatchException('Describe the change you want first.');
+                }
+                $patch = ai_suggest_patch($config, $proposal, $latestNow, $ask);
+                $revision = new AmendmentRevision(
+                    $ask, $patch['ops'], $patch['summary'], AmendmentRevision::AI, $me->id, Store::nowUtc(),
+                );
+            } else {
+                $kind = (string) ($_POST['kind'] ?? '');
+                $clauseRaw = (string) ($_POST['clause'] ?? '');
+                $newText = trim((string) ($_POST['new_text'] ?? ''));
+                $ops = PatchValidator::validate([[
+                    'clauseId' => $clauseRaw === 'top' ? null : $clauseRaw,
+                    'operation' => $kind,
+                    'text' => $kind === Amendment::STRIKE ? null : $newText,
+                ]], $latestNow);
+                $revision = new AmendmentRevision(
+                    $ask !== '' ? $ask : 'Hand-written patch',
+                    $ops,
+                    Amendment::kindLabel($kind),
+                    AmendmentRevision::HUMAN,
+                    $me->id,
+                    Store::nowUtc(),
+                );
+            }
             $proposal->amendments[] = new Amendment(
                 Store::newId(),
-                $proposal->latest()->number,
-                $clauseId,
-                $kind,
-                $kind === Amendment::STRIKE ? null : $newText,
-                Amendment::PROPOSED,
+                $latestNow->number,
+                null,
+                '',
+                null,
+                Amendment::DRAFT,
                 $me->id,
                 $me->name,
                 Store::nowUtc(),
+                [$revision],
+                null,
             );
             $store->save('proposals', $proposal->toArray());
+        } catch (PatchException $e) {
+            flash('Patch failed: ' . $e->getMessage());
+        }
+    } elseif ($action === 'hone') {
+        $amendment = $proposal->amendment((string) ($_POST['amendment'] ?? ''));
+        if ($amendment !== null) {
+            if (!$amendment->canHone($me->id, is_chair($store))) {
+                forbid();
+            }
+            $ask = trim((string) ($_POST['ask'] ?? ''));
+            try {
+                if ($ask === '') {
+                    throw new PatchException('Say what to change in the draft.');
+                }
+                $patch = ai_suggest_patch($config, $proposal, $latestNow, $ask, $amendment->currentOps());
+                $amendment->revisions[] = new AmendmentRevision(
+                    $ask, $patch['ops'], $patch['summary'], AmendmentRevision::AI, $me->id, Store::nowUtc(),
+                );
+                $store->save('proposals', $proposal->toArray());
+            } catch (PatchException $e) {
+                flash('Hone failed: ' . $e->getMessage());
+            }
+        }
+    } elseif ($action === 'propose-for-vote') {
+        $amendment = $proposal->amendment((string) ($_POST['amendment'] ?? ''));
+        if ($amendment !== null) {
+            if (!$amendment->canHone($me->id, is_chair($store))) {
+                forbid();
+            }
+            $target = (string) ($_POST['item'] ?? '');
+            $candidates = $votableItems();
+            if (!isset($candidates[$target])) {
+                flash('Submit the proposal to a session first — the amendment vote needs an agenda item.');
+            } else {
+                $session = $candidates[$target]['session'];
+                $item = $candidates[$target]['item'];
+                $ballot = Ballot::create(
+                    $session->id,
+                    $item->id,
+                    $proposal->id,
+                    'Amendment: ' . ($amendment->revisions !== []
+                        ? $amendment->revisions[0]->summary
+                        : Amendment::kindLabel($amendment->kind)),
+                    $me->id,
+                    $amendment->id,
+                );
+                $store->save('ballots', $ballot->toArray());
+                $amendment->status = Amendment::PROPOSED;
+                $amendment->ballotId = $ballot->id;
+                $store->save('proposals', $proposal->toArray());
+            }
         }
     } elseif ($action === 'accept-amendment' || $action === 'reject-amendment') {
+        // Manual decision, only for legacy proposed amendments without a
+        // ballot — frozen ballot-linked amendments are decided by the vote.
         $amendment = $proposal->amendment((string) ($_POST['amendment'] ?? ''));
-        if ($amendment !== null && $amendment->status === Amendment::PROPOSED) {
+        if ($amendment !== null && $amendment->status === Amendment::PROPOSED && $amendment->ballotId === null) {
             if ($action === 'accept-amendment') {
                 $proposal->acceptAmendment($amendment, $me);
             } else {
@@ -80,6 +183,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $latest = $proposal->latest();
+$me = current_user($store);
+$chair = is_chair($store);
+$flashMessage = flash_take();
 
 // Which version to display (defaults to latest), and an optional diff pair.
 $viewNumber = (int) ($_GET['v'] ?? $latest->number);
@@ -104,27 +210,49 @@ $sessions = array_values(array_filter(
     static fn (Session $s): bool => $s->status !== Session::CLOSED,
 ));
 
-/** Rendered preview of an amendment against the latest version. */
-$amendmentPreview = static function (Amendment $a) use ($latest): string {
-    $target = null;
-    foreach ($latest->clauses as $clause) {
-        if ($clause->id === $a->clauseId) {
-            $target = $clause;
-            break;
+/**
+ * Render a patch (list of ops) against the latest version as <del>/<ins>.
+ *
+ * @param list<array{clauseId: ?string, operation: string, text: ?string}> $ops
+ */
+$opsPreview = static function (array $ops) use ($latest): string {
+    $html = '';
+    foreach ($ops as $op) {
+        $target = null;
+        $targetIndex = null;
+        foreach ($latest->clauses as $i => $clause) {
+            if ($clause->id === $op['clauseId']) {
+                $target = $clause;
+                $targetIndex = $i;
+                break;
+            }
+        }
+        $where = $targetIndex !== null ? '§' . ($targetIndex + 1) : ($op['clauseId'] === null ? 'top' : '§?');
+        $html .= '<p class="meta">' . h(Amendment::kindLabel($op['operation'])) . ' ' . $where . '</p>';
+        if ($op['operation'] === Amendment::INSERT_AFTER) {
+            $html .= '<p><ins>' . h((string) $op['text']) . '</ins></p>';
+        } elseif ($target === null) {
+            $html .= '<p><em>Target clause no longer exists in the latest version.</em></p>';
+        } elseif ($op['operation'] === Amendment::STRIKE) {
+            $html .= '<p><del>' . h($target->text) . '</del></p>';
+        } else {
+            $html .= '<p>' . render_diff($target->text, (string) $op['text']) . '</p>';
         }
     }
-    if ($a->kind === Amendment::INSERT_AFTER) {
-        return '<ins>' . h((string) $a->newText) . '</ins>';
-    }
-    if ($target === null) {
-        return '<em>Target clause no longer exists in the latest version.</em>';
-    }
-    if ($a->kind === Amendment::STRIKE) {
-        return '<del>' . h($target->text) . '</del>';
-    }
 
-    return render_diff($target->text, (string) $a->newText);
+    return $html;
 };
+
+/** Render one amendment's current patch preview. */
+$amendmentPreview = static fn (Amendment $a): string => $opsPreview($a->currentOps());
+
+/** Session/label lookup for ballot links. */
+$sessionTitles = [];
+foreach ($store->list('sessions') as $sdata) {
+    $sessionTitles[(string) $sdata['id']] = (string) $sdata['title'];
+}
+
+$candidates = $votableItems();
 
 $pageTitle = 'Assembly sandbox — ' . $proposal->title;
 require __DIR__ . '/_header.php';
@@ -134,6 +262,10 @@ require __DIR__ . '/_header.php';
 
 <h1><?= h($proposal->title) ?> <span class="badge"><?= h(Proposal::statusLabel($proposal->status)) ?></span></h1>
 <p class="meta">Created by <?= h($proposal->createdByName) ?> at <?= h(fmt_time($proposal->createdAtUtc)) ?> UTC → local.</p>
+
+<?php if ($flashMessage !== null): ?>
+    <p class="error"><?= h($flashMessage) ?></p>
+<?php endif; ?>
 
 <section class="card">
     <h2>Version <?= $viewVersion->number ?> <?= $viewVersion->number === $latest->number ? '(latest)' : '' ?></h2>
@@ -185,29 +317,18 @@ require __DIR__ . '/_header.php';
 </section>
 
 <section class="card">
-    <h2>Pending amendments (<?= count($proposal->pendingAmendments()) ?>)</h2>
-    <?php foreach ($proposal->pendingAmendments() as $amendment): ?>
-        <div class="amendment">
-            <p class="meta">
-                <strong><?= h(Amendment::kindLabel($amendment->kind)) ?></strong>
-                by <?= h($amendment->proposedByName) ?>, <?= h(fmt_time($amendment->createdAtUtc)) ?>
-                (against v<?= $amendment->targetVersion ?>)
-            </p>
-            <p class="diff-view"><?= $amendmentPreview($amendment) ?></p>
-            <form method="post" class="inline-form">
-                <input type="hidden" name="id" value="<?= h($proposal->id) ?>">
-                <input type="hidden" name="amendment" value="<?= h($amendment->id) ?>">
-                <input type="hidden" name="_back" value="<?= h($back) ?>">
-                <button type="submit" name="action" value="accept-amendment">Accept → new version</button>
-                <button type="submit" name="action" value="reject-amendment" class="link-button">Reject</button>
-            </form>
-        </div>
-    <?php endforeach; ?>
-    <?php if ($proposal->pendingAmendments() === []): ?>
-        <p class="meta">None.</p>
-    <?php endif; ?>
-
-    <h3>Add amendment (against v<?= $latest->number ?>)</h3>
+    <h2>New amendment</h2>
+    <p class="meta">Amendments start as drafts you can hone, then freeze for a session vote. AI proposes, humans dispose.</p>
+    <form method="post">
+        <input type="hidden" name="action" value="ask-ai">
+        <input type="hidden" name="id" value="<?= h($proposal->id) ?>">
+        <input type="hidden" name="_back" value="<?= h($back) ?>">
+        <label>Ask AI for a patch — describe the change in plain words
+            <textarea name="ask" rows="2" placeholder="e.g. raise the fee to 300 kroner"></textarea>
+        </label>
+        <button type="submit">Draft with AI</button>
+    </form>
+    <h3>…or write it yourself (against v<?= $latest->number ?>)</h3>
     <form method="post">
         <input type="hidden" name="action" value="add-amendment">
         <input type="hidden" name="id" value="<?= h($proposal->id) ?>">
@@ -230,9 +351,128 @@ require __DIR__ . '/_header.php';
         <label>New text (not needed for strike)
             <textarea name="new_text" rows="3"></textarea>
         </label>
-        <button type="submit">Add amendment</button>
+        <label>Note / rationale (optional)
+            <input type="text" name="ask">
+        </label>
+        <button type="submit">Draft amendment</button>
     </form>
 </section>
+
+<?php $drafts = $proposal->draftAmendments(); ?>
+<section class="card">
+    <h2>Amendment drafts (<?= count($drafts) ?>)</h2>
+    <?php foreach ($drafts as $amendment): ?>
+        <div class="amendment">
+            <p class="meta">
+                Draft by <?= h($amendment->proposedByName) ?>, <?= h(fmt_time($amendment->createdAtUtc)) ?>
+                (against v<?= $amendment->targetVersion ?>) · <?= count($amendment->revisions) ?> revision(s)
+            </p>
+            <div class="diff-view"><?= $amendmentPreview($amendment) ?></div>
+            <h4>Revision history</h4>
+            <?php foreach ($amendment->revisions as $i => $revision): ?>
+                <div class="revision">
+                    <p class="meta">
+                        r<?= $i + 1 ?> <span class="badge source-<?= h($revision->source) ?>"><?= h($revision->source) ?></span>
+                        <?= h(fmt_time($revision->createdAtUtc)) ?> — ask: “<?= h($revision->ask) ?>”
+                        — <?= h($revision->summary) ?>
+                    </p>
+                    <div class="diff-view"><?= $opsPreview($revision->ops) ?></div>
+                </div>
+            <?php endforeach; ?>
+            <?php if ($amendment->canHone($me->id, $chair)): ?>
+                <form method="post" class="inline-form">
+                    <input type="hidden" name="action" value="hone">
+                    <input type="hidden" name="id" value="<?= h($proposal->id) ?>">
+                    <input type="hidden" name="amendment" value="<?= h($amendment->id) ?>">
+                    <input type="hidden" name="_back" value="<?= h($back) ?>">
+                    <input type="text" name="ask" placeholder="nah, more like this…" required>
+                    <button type="submit">Hone with AI</button>
+                </form>
+                <?php if ($candidates !== []): ?>
+                <form method="post" class="inline-form">
+                    <input type="hidden" name="action" value="propose-for-vote">
+                    <input type="hidden" name="id" value="<?= h($proposal->id) ?>">
+                    <input type="hidden" name="amendment" value="<?= h($amendment->id) ?>">
+                    <input type="hidden" name="_back" value="<?= h($back) ?>">
+                    <select name="item">
+                        <?php foreach ($candidates as $key => $candidate): ?>
+                            <option value="<?= h($key) ?>">
+                                <?= h($candidate['session']->title) ?> — <?= h($candidate['item']->title) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button type="submit">Propose for vote (freeze)</button>
+                </form>
+                <?php else: ?>
+                    <p class="meta">Submit the proposal to a session before the draft can go to a vote.</p>
+                <?php endif; ?>
+            <?php endif; ?>
+        </div>
+    <?php endforeach; ?>
+    <?php if ($drafts === []): ?>
+        <p class="meta">None.</p>
+    <?php endif; ?>
+</section>
+
+<?php $pending = $proposal->pendingAmendments(); ?>
+<section class="card">
+    <h2>Proposed amendments (frozen, <?= count($pending) ?>)</h2>
+    <?php foreach ($pending as $amendment): ?>
+        <div class="amendment">
+            <p class="meta">
+                by <?= h($amendment->proposedByName) ?>, <?= h(fmt_time($amendment->createdAtUtc)) ?>
+                (against v<?= $amendment->targetVersion ?>)
+            </p>
+            <div class="diff-view"><?= $amendmentPreview($amendment) ?></div>
+            <?php if ($amendment->ballotId !== null): ?>
+                <?php $ballotData = $store->load('ballots', $amendment->ballotId); ?>
+                <p class="meta">
+                    Being voted on
+                    <?php if ($ballotData !== null): ?>
+                        in <a href="session.php?id=<?= h((string) $ballotData['sessionId']) ?>"><?= h($sessionTitles[(string) $ballotData['sessionId']] ?? 'session') ?></a>
+                        (ballot <?= h($ballotData['status']) ?>)
+                    <?php endif; ?>
+                </p>
+            <?php else: ?>
+                <form method="post" class="inline-form">
+                    <input type="hidden" name="id" value="<?= h($proposal->id) ?>">
+                    <input type="hidden" name="amendment" value="<?= h($amendment->id) ?>">
+                    <input type="hidden" name="_back" value="<?= h($back) ?>">
+                    <button type="submit" name="action" value="accept-amendment">Accept → new version</button>
+                    <button type="submit" name="action" value="reject-amendment" class="link-button">Reject</button>
+                </form>
+            <?php endif; ?>
+        </div>
+    <?php endforeach; ?>
+    <?php if ($pending === []): ?>
+        <p class="meta">None.</p>
+    <?php endif; ?>
+</section>
+
+<?php $decided = $proposal->decidedAmendments(); ?>
+<?php if ($decided !== []): ?>
+<section class="card">
+    <h2>Decided amendments (<?= count($decided) ?>)</h2>
+    <p class="meta">The permanent record behind the chain — rejected amendments keep their diff too.</p>
+    <?php foreach ($decided as $amendment): ?>
+        <div class="amendment">
+            <p class="meta">
+                <span class="badge amendment-<?= h($amendment->status) ?>"><?= h(Amendment::statusLabel($amendment->status)) ?></span>
+                by <?= h($amendment->proposedByName) ?>, <?= h(fmt_time($amendment->createdAtUtc)) ?>
+                <?php if ($amendment->ballotId !== null): ?>
+                    <?php $ballotData = $store->load('ballots', $amendment->ballotId); ?>
+                    <?php if ($ballotData !== null): ?>
+                        <?php $tally = Ballot::tally($store->list('votes/' . $amendment->ballotId)); ?>
+                        — vote: <?= $tally[Ballot::FOR] ?> for, <?= $tally[Ballot::AGAINST] ?> against, <?= $tally[Ballot::ABSTAIN] ?> abstain
+                        (<a href="session.php?id=<?= h((string) $ballotData['sessionId']) ?>">session</a>)
+                    <?php endif; ?>
+                <?php endif; ?>
+            </p>
+            <div class="diff-view"><?= $amendmentPreview($amendment) ?></div>
+        </div>
+    <?php endforeach; ?>
+</section>
+<?php endif; ?>
 
 <section class="card">
     <h2>Submit to session</h2>

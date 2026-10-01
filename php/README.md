@@ -70,6 +70,49 @@ done. Choices are `for` / `against` / `abstain` (the ternary model of the
 are recomputed from the vote documents on every render — no counters to
 drift. Secret ballots remain out of scope.
 
+## AI-assisted amendment drafting
+
+"AI proposes, humans dispose." On a proposal page you can ask the AI for a
+patch in plain words; the answer is a list of clause ops (replace /
+strike / insert-after) that becomes an **amendment draft** — never a
+direct edit. Amendments carry an append-only `revisions` list, so honing
+("nah, more like this…") adds a revision and the drafting history stays
+inspectable. The lifecycle:
+
+```
+draft → (hone → draft)* → proposed (frozen, ballot created)
+      → accepted (patch applied as a new immutable version)
+      → rejected (proposal untouched; amendment kept with its diff + tally)
+```
+
+Freezing ("Propose for vote") creates an open ballot referencing the
+amendment under an agenda item linked to the proposal. When the session
+owner closes that ballot, the outcome applies automatically: `for >
+against` accepts (abstains don't count either way).
+
+The proposer and chairs/admins can hone and freeze; everyone can view
+drafts. Every op is validated server-side (`Ai\PatchValidator`): unknown
+clause ids or malformed operations are rejected with a flash error and
+nothing is saved.
+
+Config (`config.php`):
+
+```php
+'ai' => [
+    'provider' => 'mock',        // or 'anthropic'
+    'api_key' => '',             // needed for anthropic
+    'model' => 'claude-haiku-4-5',
+],
+```
+
+- `mock` (default) — deterministic canned patch, zero keys, exercises the
+  whole flow offline.
+- `anthropic` — plain-curl Messages API client with forced tool use for
+  structured ops output. Claude Haiku 4.5 is the default model (~$1/$5 per
+  million tokens; a patch is ~2–4k tokens in / <1k out, well under a cent
+  per call). Sonnet 5 is a one-line upgrade if wording quality
+  disappoints.
+
 ## Data layout
 
 Document-per-aggregate, mirroring the .NET lane's storage layout:

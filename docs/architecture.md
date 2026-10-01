@@ -6,8 +6,9 @@
 > concepts and JSON document structures on plain PHP hosting. It shares
 > the document layout and domain vocabulary below, but not the
 > one-process model — it has no in-memory state, no mutation gate, no
-> realtime. It sketches users/roles, topics, and open (roll-call) voting
-> as sandbox experiments; secret ballots remain .NET-only.
+> realtime. It sketches users/roles, topics, open (roll-call) voting, and
+> AI-assisted amendment drafting ("AI proposes, humans dispose") as
+> sandbox experiments; secret ballots remain .NET-only.
 > See `php/README.md`.
 
 ## Goals and constraints

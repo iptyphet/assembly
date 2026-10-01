@@ -2,7 +2,13 @@
 
 declare(strict_types=1);
 
+use Assembly\Ai\AiClient;
+use Assembly\Ai\AnthropicAiClient;
+use Assembly\Ai\MockAiClient;
+use Assembly\Ai\PatchValidator;
 use Assembly\Data\Store;
+use Assembly\Domain\Proposal;
+use Assembly\Domain\ProposalVersion;
 use Assembly\Domain\Session;
 use Assembly\Domain\User;
 use Assembly\Text\WordDiff;
@@ -15,7 +21,12 @@ $configFile = dirname(__DIR__) . '/config.php';
 $config = is_file($configFile)
     ? require $configFile
     : require dirname(__DIR__) . '/config.example.php';
-$config += ['password' => '', 'data_dir' => dirname(__DIR__) . '/data', 'timezone' => 'Europe/Oslo'];
+$config += [
+    'password' => '',
+    'data_dir' => dirname(__DIR__) . '/data',
+    'timezone' => 'Europe/Oslo',
+    'ai' => ['provider' => 'mock', 'api_key' => '', 'model' => 'claude-haiku-4-5'],
+];
 
 date_default_timezone_set((string) $config['timezone']);
 
@@ -145,6 +156,50 @@ function fmt_time(?string $utc): string
     return (new \DateTimeImmutable($utc))
         ->setTimezone(new \DateTimeZone(date_default_timezone_get()))
         ->format('Y-m-d H:i');
+}
+
+/** AI client from config: mock by default, Anthropic when a key is set. */
+function ai_client(array $config): AiClient
+{
+    $ai = (array) ($config['ai'] ?? []);
+    if (($ai['provider'] ?? 'mock') === 'anthropic') {
+        return new AnthropicAiClient((string) ($ai['api_key'] ?? ''), (string) ($ai['model'] ?? 'claude-haiku-4-5'));
+    }
+
+    return new MockAiClient();
+}
+
+/**
+ * Ask the configured AI for a patch and validate the ops in one place.
+ *
+ * @param list<array{clauseId: ?string, operation: string, text: ?string}>|null $previousDraftOps
+ * @return array{ops: list<array{clauseId: ?string, operation: string, text: ?string}>, summary: string}
+ */
+function ai_suggest_patch(
+    array $config,
+    Proposal $proposal,
+    ProposalVersion $latestVersion,
+    string $ask,
+    ?array $previousDraftOps = null,
+): array {
+    $result = ai_client($config)->suggestPatch($proposal, $latestVersion, $ask, $previousDraftOps);
+    $result['ops'] = PatchValidator::validate($result['ops'], $latestVersion);
+
+    return $result;
+}
+
+/** One-shot flash message across the PRG redirect. */
+function flash(string $message): void
+{
+    $_SESSION['flash'] = $message;
+}
+
+function flash_take(): ?string
+{
+    $message = $_SESSION['flash'] ?? null;
+    unset($_SESSION['flash']);
+
+    return $message === null ? null : (string) $message;
 }
 
 /**

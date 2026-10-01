@@ -49,7 +49,8 @@ require __DIR__ . '/_header.php';
         </h2>
         <p class="meta">
             v<?= $proposal->latest()->number ?> ·
-            <?= count($proposal->pendingAmendments()) ?> pending amendment(s) ·
+            <?= count($proposal->draftAmendments()) ?> draft(s) ·
+            <?= count($proposal->pendingAmendments()) ?> proposed amendment(s) ·
             by <?= h($proposal->createdByName) ?> ·
             <a href="json.php?type=proposals&id=<?= h($proposal->id) ?>">view JSON</a>
         </p>

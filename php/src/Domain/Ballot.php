@@ -37,6 +37,7 @@ final class Ballot
         public readonly string $createdByUserId,
         public readonly string $createdAtUtc,
         public ?string $closedAtUtc,
+        public ?string $amendmentId,
     ) {
     }
 
@@ -46,6 +47,7 @@ final class Ballot
         string $proposalId,
         string $title,
         string $userId,
+        ?string $amendmentId = null,
     ): self {
         return new self(
             Store::newId(),
@@ -57,6 +59,7 @@ final class Ballot
             $userId,
             Store::nowUtc(),
             null,
+            $amendmentId,
         );
     }
 
@@ -73,6 +76,7 @@ final class Ballot
             (string) ($data['createdByUserId'] ?? ''),
             (string) ($data['createdAtUtc'] ?? ''),
             isset($data['closedAtUtc']) ? (string) $data['closedAtUtc'] : null,
+            isset($data['amendmentId']) ? (string) $data['amendmentId'] : null,
         );
     }
 
@@ -89,6 +93,7 @@ final class Ballot
             'createdByUserId' => $this->createdByUserId,
             'createdAtUtc' => $this->createdAtUtc,
             'closedAtUtc' => $this->closedAtUtc,
+            'amendmentId' => $this->amendmentId,
         ];
     }
 

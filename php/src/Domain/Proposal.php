@@ -75,6 +75,55 @@ final class ProposalVersion
     }
 }
 
+/**
+ * One iteration of an amendment's patch. Append-only: honing adds a new
+ * revision, so the drafting history stays inspectable.
+ */
+final class AmendmentRevision
+{
+    /**
+     * @param list<array{clauseId: ?string, operation: string, text: ?string}> $ops
+     */
+    public function __construct(
+        public readonly string $ask,
+        public readonly array $ops,
+        public readonly string $summary,
+        public readonly string $source,
+        public readonly string $createdByUserId,
+        public readonly string $createdAtUtc,
+    ) {
+    }
+
+    public const AI = 'ai';
+    public const HUMAN = 'human';
+
+    /** @param array<string, mixed> $data */
+    public static function fromArray(array $data): self
+    {
+        return new self(
+            (string) ($data['ask'] ?? ''),
+            array_values((array) ($data['ops'] ?? [])),
+            (string) ($data['summary'] ?? ''),
+            in_array($data['source'] ?? null, [self::AI, self::HUMAN], true) ? (string) $data['source'] : self::HUMAN,
+            (string) ($data['createdByUserId'] ?? ''),
+            (string) ($data['createdAtUtc'] ?? ''),
+        );
+    }
+
+    /** @return array<string, mixed> */
+    public function toArray(): array
+    {
+        return [
+            'ask' => $this->ask,
+            'ops' => $this->ops,
+            'summary' => $this->summary,
+            'source' => $this->source,
+            'createdByUserId' => $this->createdByUserId,
+            'createdAtUtc' => $this->createdAtUtc,
+        ];
+    }
+}
+
 final class Amendment
 {
     public const REPLACE = 'replace_clause';
@@ -83,11 +132,19 @@ final class Amendment
 
     public const KINDS = [self::REPLACE, self::STRIKE, self::INSERT_AFTER];
 
+    public const DRAFT = 'draft';
     public const PROPOSED = 'proposed';
     public const ACCEPTED = 'accepted';
     public const REJECTED = 'rejected';
     public const WITHDRAWN = 'withdrawn';
 
+    /**
+     * clauseId/kind/newText are the legacy single-op shape (pre-revision
+     * documents). Revision-based amendments leave them null/empty and carry
+     * their patch in $revisions; currentOps() bridges both.
+     *
+     * @param list<AmendmentRevision> $revisions
+     */
     public function __construct(
         public readonly string $id,
         public readonly int $targetVersion,
@@ -98,6 +155,8 @@ final class Amendment
         public readonly string $proposedByUserId,
         public readonly string $proposedByName,
         public readonly string $createdAtUtc,
+        public array $revisions,
+        public ?string $ballotId,
     ) {
     }
 
@@ -108,12 +167,14 @@ final class Amendment
             (string) $data['id'],
             (int) ($data['targetVersion'] ?? 1),
             isset($data['clauseId']) ? (string) $data['clauseId'] : null,
-            (string) $data['kind'],
+            (string) ($data['kind'] ?? ''),
             isset($data['newText']) ? (string) $data['newText'] : null,
             (string) ($data['status'] ?? self::PROPOSED),
             (string) ($data['proposedByUserId'] ?? ''),
             (string) ($data['proposedByName'] ?? ''),
             (string) ($data['createdAtUtc'] ?? ''),
+            array_map(AmendmentRevision::fromArray(...), array_values((array) ($data['revisions'] ?? []))),
+            isset($data['ballotId']) ? (string) $data['ballotId'] : null,
         );
     }
 
@@ -130,7 +191,37 @@ final class Amendment
             'proposedByUserId' => $this->proposedByUserId,
             'proposedByName' => $this->proposedByName,
             'createdAtUtc' => $this->createdAtUtc,
+            'revisions' => array_map(static fn (AmendmentRevision $r): array => $r->toArray(), $this->revisions),
+            'ballotId' => $this->ballotId,
         ];
+    }
+
+    /**
+     * The current patch: latest revision's ops, or the legacy single op
+     * for pre-revision documents.
+     *
+     * @return list<array{clauseId: ?string, operation: string, text: ?string}>
+     */
+    public function currentOps(): array
+    {
+        if ($this->revisions !== []) {
+            return $this->revisions[count($this->revisions) - 1]->ops;
+        }
+        if ($this->kind === '') {
+            return [];
+        }
+
+        return [[
+            'clauseId' => $this->clauseId,
+            'operation' => $this->kind,
+            'text' => $this->newText,
+        ]];
+    }
+
+    /** May this user hone or freeze the draft? Proposer or chair/admin. */
+    public function canHone(string $userId, bool $isChair): bool
+    {
+        return $this->status === self::DRAFT && ($this->proposedByUserId === $userId || $isChair);
     }
 
     public static function kindLabel(string $kind): string
@@ -140,6 +231,18 @@ final class Amendment
             self::STRIKE => 'Strike clause',
             self::INSERT_AFTER => 'Insert clause after',
             default => $kind,
+        };
+    }
+
+    public static function statusLabel(string $status): string
+    {
+        return match ($status) {
+            self::DRAFT => 'Draft',
+            self::PROPOSED => 'Proposed (frozen, voting)',
+            self::ACCEPTED => 'Accepted',
+            self::REJECTED => 'Rejected',
+            self::WITHDRAWN => 'Withdrawn',
+            default => $status,
         };
     }
 }
@@ -255,6 +358,24 @@ final class Proposal
         ));
     }
 
+    /** @return list<Amendment> */
+    public function draftAmendments(): array
+    {
+        return array_values(array_filter(
+            $this->amendments,
+            static fn (Amendment $a): bool => $a->status === Amendment::DRAFT,
+        ));
+    }
+
+    /** Decided amendments (accepted/rejected) — the record behind the chain. */
+    public function decidedAmendments(): array
+    {
+        return array_values(array_filter(
+            $this->amendments,
+            static fn (Amendment $a): bool => in_array($a->status, [Amendment::ACCEPTED, Amendment::REJECTED, Amendment::WITHDRAWN], true),
+        ));
+    }
+
     public function amendment(string $id): ?Amendment
     {
         foreach ($this->amendments as $amendment) {
@@ -267,34 +388,51 @@ final class Proposal
     }
 
     /**
-     * Apply an amendment to a version's clauses and return the resulting NEW
-     * clause list. Input clauses are never mutated.
+     * Apply a patch (list of clause ops) to a version's clauses and return
+     * the resulting NEW clause list. Input clauses are never mutated.
+     *
+     * @param list<Clause> $clauses
+     * @param list<array{clauseId: ?string, operation: string, text: ?string}> $ops
+     * @return list<Clause>
+     */
+    public static function applyOps(array $clauses, array $ops): array
+    {
+        $result = $clauses;
+        foreach ($ops as $op) {
+            $clauseId = $op['clauseId'];
+            $next = [];
+            foreach ($result as $clause) {
+                if ($clause->id === $clauseId && $op['operation'] === Amendment::STRIKE) {
+                    continue;
+                }
+                if ($clause->id === $clauseId && $op['operation'] === Amendment::REPLACE) {
+                    $next[] = new Clause(Store::newId(), (string) $op['text']);
+                    continue;
+                }
+                $next[] = $clause;
+                if ($clause->id === $clauseId && $op['operation'] === Amendment::INSERT_AFTER) {
+                    $next[] = new Clause(Store::newId(), (string) $op['text']);
+                }
+            }
+            // Insert-after with null clause id = insert at the top of the document.
+            if ($clauseId === null && $op['operation'] === Amendment::INSERT_AFTER) {
+                array_unshift($next, new Clause(Store::newId(), (string) $op['text']));
+            }
+            $result = $next;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Apply an amendment's current patch to a version's clauses.
      *
      * @param list<Clause> $clauses
      * @return list<Clause>
      */
     public static function applyAmendment(array $clauses, Amendment $amendment): array
     {
-        $result = [];
-        foreach ($clauses as $clause) {
-            if ($clause->id === $amendment->clauseId && $amendment->kind === Amendment::STRIKE) {
-                continue;
-            }
-            if ($clause->id === $amendment->clauseId && $amendment->kind === Amendment::REPLACE) {
-                $result[] = new Clause(Store::newId(), (string) $amendment->newText);
-                continue;
-            }
-            $result[] = $clause;
-            if ($clause->id === $amendment->clauseId && $amendment->kind === Amendment::INSERT_AFTER) {
-                $result[] = new Clause(Store::newId(), (string) $amendment->newText);
-            }
-        }
-        // Insert-after with null clause id = insert at the top of the document.
-        if ($amendment->clauseId === null && $amendment->kind === Amendment::INSERT_AFTER) {
-            array_unshift($result, new Clause(Store::newId(), (string) $amendment->newText));
-        }
-
-        return $result;
+        return self::applyOps($clauses, $amendment->currentOps());
     }
 
     /**
@@ -311,7 +449,7 @@ final class Proposal
             $author->id,
             $author->name,
             Store::nowUtc(),
-            'Accepted ' . Amendment::kindLabel($amendment->kind) . ' by ' . $amendment->proposedByName,
+            'Accepted amendment by ' . $amendment->proposedByName,
         );
         $amendment->status = Amendment::ACCEPTED;
     }
